@@ -265,7 +265,9 @@ for the first: evidence is still checked by the gate, not by you.
 ⚠️ If the text says the human decided or said something and there is no [USER] evidence,
    it must be FIX or TOSS.
 
-Output shape (nothing else):
+Dates and clock times (2026-09-06, 14:05) are labels, not numbers — never a reason to FIX.
+
+Output shape (nothing else). The FIRST line is the single verdict word, no preamble:
   <POUR|FIX|TOSS>
   reason: <one line>
   BELONGS_BECAUSE: <only for FIX, only if you are supplying the missing sentence>

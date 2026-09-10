@@ -149,6 +149,12 @@ def gate(cands: list[dict], segs: list[Segment], store_text: str = "") -> tuple[
 
 _SCI_OR_NUM = re.compile(r"[+-]?\d+(?:\.\d+)?[eE][+-]?\d+|[+-]?\d[\d,.:/-]*\d|[+-]?\d")
 _LIST_MARKER = re.compile(r"(?m)^\s*\d+[.)]\s+")
+# A date or a clock is a label, not a measurement: the charter asks every body for a
+# 裁定日/蒸留日 line, and a "9" cut out of 2026-09-06 was being refused as an invented
+# quantity. Shapes: 2026-09-06 / 2026/9/6 / 2026年9月6日 / 9月6日 / 9/6 / 14:05(:33).
+_DATE_OR_CLOCK = re.compile(
+    r"\d{4}[-/年]\s?\d{1,2}[-/月]\s?\d{1,2}日?|\d{4}年|\d{1,2}月\d{1,2}日|"
+    r"(?<![\d.])\d{1,2}/\d{1,2}(?![\d/.])|\b\d{1,2}:\d{2}(?::\d{2})?\b")
 
 
 def _num_normalize(s: str) -> str:
@@ -188,7 +194,7 @@ def composed_number_violations(text: str, evidence: list[dict], allowed: str = "
         exact.add(c)
         unsigned.add(c.lstrip("+-"))
     bad: list[str] = []
-    for t in _num_tokens(_LIST_MARKER.sub("", _num_normalize(text))):
+    for t in _num_tokens(_DATE_OR_CLOCK.sub(" ", _LIST_MARKER.sub("", _num_normalize(text)))):
         ok = (t in exact) if t[:1] in "+-" else (t in unsigned)
         if not ok and t not in bad:
             bad.append(t)

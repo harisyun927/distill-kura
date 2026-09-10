@@ -832,8 +832,15 @@ class Distiller:
         if not (out or "").strip():
             return {"slug": slug, "verdict": "SKIP", "judged_sha": judged_sha,
                     "why": "the scribe was unreachable or answered nothing — not a verdict"}
-        first = (out.splitlines() or [""])[0].upper()
-        v = next((x for x in ("POUR", "FIX", "TOSS") if x in first), None)
+        # The verdict word may trail a stray preamble line; look at the first three
+        # non-empty lines. No verdict word at all is "the scribe did not keep the
+        # shape" — and that is NOT a verdict: a SKIP keeps the gate-passed draft for
+        # the next tick instead of deleting it (38 drafts were lost this way).
+        heads = [l.upper() for l in out.splitlines() if l.strip()][:3]
+        v = next((x for l in heads for x in ("POUR", "FIX", "TOSS") if re.search(rf"\b{x}\b", l)), None)
+        if v is None:
+            return {"slug": slug, "verdict": "SKIP", "judged_sha": judged_sha,
+                    "why": "the scribe did not keep the shape (no POUR/FIX/TOSS in the first lines) — not a verdict"}
         rm = re.search(r"^reason[:：]\s*(.+)$", out, re.M | re.I) if v else None
         why = rm.group(1) if rm else ""
         m = re.search(r"^BODY:\s*\n(.*)$", out, re.S | re.M)
