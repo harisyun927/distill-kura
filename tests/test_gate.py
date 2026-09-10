@@ -308,3 +308,10 @@ def test_the_index_craft_tells_writers_that_retired_things_wear_it():
     assert "never hidden" in INDEX_CRAFT
     for sysmsg in (SCRIBE_SYS, TIDY_SYS):
         assert "Retired things wear it" in sysmsg
+
+
+def test_composed_dates_are_labels_not_numbers():
+    from distill_kura.distill.gate import composed_number_violations
+    ev = [{"text": "[USER] 使い捨てにしてった方がいい"}]
+    assert composed_number_violations("裁定日: 2026-09-06\n9/12 に 14:05 で決めた。2026年9月6日。", ev) == []
+    assert composed_number_violations("裁定日: 2026-09-06 に 12 GPU で決めた", ev) == ["12"]
