@@ -87,8 +87,13 @@ _TYPES = {"path": str, "label": str, "readonly": bool, "write_policy": str,
 _DISTILL_TYPES = {"inherit_global_journals": bool, "journals": dict, "language": str,
                   "scribe_slots": int, "chunk_chars": int, "max_items": int,
                   "coverage_passes": int,
+                  # what an EXTENDS verdict does: "append" (default) or "continue"
+                  "extend_mode": str,
                   # the watcher (`kura tend`)
                   "idle_min": (int, float), "backoff_min": (int, float), "yield_on_return": bool}
+# `append` writes an EXTENDS into the existing memory (the original behaviour);
+# `continue` leaves it untouched and writes a new memory that links back to it.
+EXTEND_MODES = ("append", "continue")
 _PREFILL_TYPES = {"window_tokens": int, "budget_fraction": float, "hard_fraction": float,
                   "fresh_days": (int, float), "pinned_types": list, "trigger_tokens": int,
                   "verbatim_after": str, "cloth_path": str, "header": str,
@@ -185,6 +190,16 @@ def _check_adaptive(section: str, t: dict) -> None:
         raise ValueError(f"[{section}] adaptive_apply=true needs adaptive_triggers=true")
 
 
+def _check_distill(section: str, t: dict) -> None:
+    """The [distill] table's shape AND its one enumerated value. An `extend_mode`
+    outside the two names is refused at load rather than read as the default."""
+    _check_table(section, t, _DISTILL_TYPES)
+    em = t.get("extend_mode")
+    if em is not None and em not in EXTEND_MODES:
+        raise ValueError(f"[{section}] extend_mode must be one of "
+                         f"{list(EXTEND_MODES)}, got {em!r}")
+
+
 def _check_prefill(section: str, t: dict) -> None:
     """The [prefill] table's shape AND its enumerated values. A `resident_mode`
     outside the three names would either raise inside `prefill.build` on every
@@ -230,7 +245,7 @@ def _check_table(where: str, table: dict, types: dict) -> None:
 
 def _check_types(name: str, sc: dict) -> None:
     _check_table(f"stores.{name}", sc, _TYPES)
-    _check_table(f"stores.{name}.distill", sc.get("distill") or {}, _DISTILL_TYPES)
+    _check_distill(f"stores.{name}.distill", sc.get("distill") or {})
     _check_prefill(f"stores.{name}.prefill", sc.get("prefill") or {})
     _check_unknown(f"stores.{name}.fastpath", sc.get("fastpath") or {}, _FASTPATH_TYPES)
     _check_table(f"stores.{name}.fastpath", sc.get("fastpath") or {}, _FASTPATH_TYPES)
@@ -457,7 +472,7 @@ class Registry:
         if not stores:
             d = os.environ.get("KURA_DIR", os.path.abspath("memory"))
             stores["main"] = Store(name="main", path=d, label=os.environ.get("KURA_LABEL", "kura"))
-        _check_table("distill", raw.get("distill") or {}, _DISTILL_TYPES)
+        _check_distill("distill", raw.get("distill") or {})
         _check_prefill("prefill", raw.get("prefill") or {})
         _check_unknown("fastpath", raw.get("fastpath") or {}, _FASTPATH_TYPES)
         _check_table("fastpath", raw.get("fastpath") or {}, _FASTPATH_TYPES)

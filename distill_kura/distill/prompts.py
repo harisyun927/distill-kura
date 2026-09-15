@@ -62,7 +62,9 @@ the world's state — not a weight of importance, and not forgetting.
 
 SPOT_SYS = """You read a raw journal between a human and an AI agent, and pick out what
 deserves to become a permanent memory IN THIS STORE. Think and answer in English; a
-separate writer does the final prose.
+separate writer does the final prose. The one exception: `belongs_because`, `keep` and
+`may_fade` are saved on the memory exactly as you write them, so write those three in
+{language}. `topic` stays an english slug.
 
 Every line is tagged with its EVIDENCE CLASS. This matters more than anything else:
   [USER] the human's own words  — primary evidence.
@@ -134,10 +136,10 @@ Output ONLY a JSON array (empty if nothing qualifies), at most {max_items} items
 [{{"topic":"<short english slug-ish name>",
   "kind":"user|feedback|project|reference|idea",
   "why":"<ONE line>",
-  "belongs_because":"<ONE sentence: why THIS store wants it>",
+  "belongs_because":"<ONE sentence in {language}: why THIS store wants it>",
   "tags":["decision","landmine"],
   "callsigns":["<exact words from a [USER] line, optional, at most two>"],
-  "keep":"<ONE sentence>", "may_fade":"<ONE sentence>",
+  "keep":"<ONE sentence in {language}>", "may_fade":"<ONE sentence in {language}>",
   "quotes":["[USER] ...", "[TOOL] ..."]}}]"""
 
 COVERAGE_SYS = """A first pass over this material already took the candidates listed
@@ -156,7 +158,8 @@ One pass optimises for the most striking thing in a batch. What it reliably miss
 Same rules as the first pass: VERBATIM quotes with their [CLASS] tag, kept short, or the
 candidate is discarded. Say why each one belongs HERE. Callsigns, if any, are copied
 exactly from a [USER] line. Do not restate anything on the
-taken list in different words.
+taken list in different words. Write `belongs_because`, `keep` and `may_fade` in
+{language}; `topic` stays an english slug.
 
 Output ONLY a JSON array, at most {max_items} items, empty if the first pass really did
 take everything:
