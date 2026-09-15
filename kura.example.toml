@@ -202,6 +202,9 @@ question = "この家で最近決めたことと、いま動いている仕事�
 language = "English"        # the language memories are WRITTEN in
 scribe_slots = 4            # concurrent compositions (match your server's slots)
 chunk_chars = 200_000       # one batch; aim at what the brain swallows in one gulp
+# extend_mode = "append"    # EXTENDS verdict: "append" writes into the existing memory;
+                            # "continue" leaves it byte-identical and writes a new memory
+                            # opening with （続き: [[old-slug]]）, read as a `continues` edge
 
 # The watcher (`kura tend`). Quiet = the newest journal file's mtime.
 idle_min = 10               # minutes of silence before a track may run

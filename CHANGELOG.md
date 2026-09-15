@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+- distill: `extend_mode = "append" | "continue"` (per store or global `[distill]`, default `append`). In `continue`, an EXTENDS verdict no longer writes into the existing memory — whose curation sentences and mark the pour used to replace with the newcomer's — but takes the new-memory path with a code-written first line `（続き: [[old-slug]]）`, which `edges.derive` reads as `continues`. The old file stays byte-identical. In that mode `pour()` also refuses an `EXTENDS:` draft, and a new memory whose slug the store already holds is staged as `slug-2` (and refused at pour if it still collides). SPOT/COVERAGE now ask for `belongs_because`/`keep`/`may_fade` in the store `language`, and an extension heading is always `## `. — fork, unreleased
+
 - warm: the debounce key is now a *signature* — the recall prompt hash plus the thinker's identity (url, model, dialect, template settings, extra). The cache lives in the mouth, not the store: the same index on another mouth is cold. A mouth that merely restarted is its service manager's job: call `kura warm --force` from an ExecStartPost hook. The warm track now runs AFTER tidy, so a tidy that rewrites the index does not make the watcher pay the cold prefill twice. (Rina, 2026-09-03) — unreleased
 
 ### Warming the thinker after the index moves (`kura warm`)
