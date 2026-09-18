@@ -41,7 +41,7 @@ from .glance import glance as do_glance
 from .recall import recall as do_recall
 from .registry import Registry
 from .server import serve
-from .store import ANNOTATION_KEYS, Store
+from .store import ANNOTATION_KEYS, FROZEN, Store
 
 
 
@@ -762,6 +762,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "retire-lane":
         from .distill.retire_lane import run_lane
+        # Checked here, before `_distiller()` runs: `Distiller.__init__` creates
+        # `_still`/`drafts` on the store it is handed, so calling it first would write
+        # to a frozen store before `run_lane`'s own frozen check ever runs. That check
+        # stays in `run_lane` too — a library caller can reach it without going through
+        # this CLI branch — but by the time it fires here it would already be too late.
+        if getattr(store, "write_policy", None) == FROZEN:
+            r = {"ok": False, "error": f"store '{store.name}' is frozen: nothing may write",
+                 "segments": 0, "faced": [], "refused": [], "skipped": []}
+            print(json.dumps(r, ensure_ascii=False, indent=1))
+            return 1
         r = run_lane(_distiller(reg, store), a.session,
                      dry_run=a.dry_run, from_start=a.from_start)
         print(json.dumps(r, ensure_ascii=False, indent=1))

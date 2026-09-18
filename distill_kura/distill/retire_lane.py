@@ -29,20 +29,31 @@ has no such anchor and must establish direction itself, and everything it writes
 accepted by `Store.retire` on the strength of that. So the whole design here is about
 refusing rather than guessing:
 
-  · **Only constructions whose word order is fixed are carried.** `に置き換え`, `→`,
-    `replace … with`, `superseded by` and the retirement verbs always put the dying
-    thing first; `instead of` always puts the successor first. `switch to`, `now use`,
-    `代わりに`, `今後は` and a bare `instead` do NOT fix an order — "switch to new-way,
-    not old-way" and "new-way を old-way の代わりに使う" both name the successor first —
-    so a quote resting on one of those is refused, not guessed at. (Found by review, not
-    by the dry run: the first version treated everything except `instead*` as old-first
-    and would have written those two backwards.)
+  · **Only constructions whose word order is fixed are carried, and "fixed" is decided
+    per construction, against ITS OWN SPAN — not once for the whole quote.** `に置き換え`,
+    `→`, `replace … with`, `superseded by` and the Japanese retirement verbs (`やめる`,
+    `廃止`) always stand the two names in the same places relative to the construction;
+    `instead of` always reverses them. `switch to`, `now use`, `代わりに`, `今後は`, a bare
+    `instead`, and — this is round 2's finding — the ENGLISH retirement verbs (`stop`,
+    `drop`, `retire`, `done with`) do NOT fix an order: Japanese `やめる` puts the dying
+    thing BEFORE the verb (`old-way をやめる`) but English puts it AFTER (`retire
+    old-way`), so folding both into one "old-first" family read "Use new-way; retire
+    old-way." backwards and would have retired the survivor. A quote resting only on a
+    construction outside the table is refused, not guessed at. (Round 1 found `switch
+    to` / `now use` / `代わりに` / `今後は` / bare `instead`; round 2 found the English
+    retirement verbs, plus that a matched construction only speaks for the occurrences
+    beside its own span — see `_construction_spans` / `_slot`.)
 
-  · **Both names must be locatable.** Order is decided by position, so a name that is
-    present by TITLE while the check looks only for the SLUG has no position at all.
-    Two missing positions compare equal, which let both orientations pass and would have
-    retired a pair reciprocally. `_where` looks for slug and title alike, and a name it
-    cannot place is a refusal.
+  · **Both names must be locatable, at EVERY occurrence, not just the first.** Order is
+    decided by position, so a name that is present by TITLE while the check looks only
+    for the SLUG has no position at all — two missing positions compare equal, which let
+    both orientations pass and would have retired a pair reciprocally. And a name that
+    the construction's span sits beside may not be its FIRST mention in the quote: round
+    2's other finding was a heading clause ("Regarding new-way: stop old-way and replace
+    it with new-way.") whose leading, unrelated mention of the successor came before the
+    construction that actually fixed the order — reading "first occurrence" made the
+    pair look reversed. `_where_all` returns every occurrence of slug and title alike,
+    and a name with none of them is a refusal.
 
   · **Two names in a line are not a transition.** Sentence by sentence is the safe read;
     the instruction that started this is written "OLD は …役目終わり。退役して、NEW に
@@ -87,56 +98,94 @@ MAX_NAMES = 8
 
 LANE_KIND = "retirement-lane"
 
-# Word order, per construction, and ONLY where the order is a property of the
-# construction rather than of one example sentence. Anything not listed here is refused:
-# see the module docstring for the two that read backwards.
-_OLD_FIRST = {"やめて…で行く", "に代えて", "に変更", "に置き換え", "→", "から…へ",
-              "replace … with", "superseded by",
-              "やめる", "廃止", "stop", "drop", "retire", "done with"}
-_NEW_FIRST = {"instead of"}
+# Direction is a property of ONE MATCHED CONSTRUCTION's span, not of the quote as a
+# whole. Round 2 finding 1: a bare retirement verb does not fix word order the way the
+# module docstring claimed — English puts the object AFTER the verb (`retire old-way`),
+# Japanese `やめる` puts it BEFORE (`old-way をやめる`) — so folding both into one
+# "old-first" family made `retire old-way` (successor named first) read as old-first
+# and would have retired the survivor. Round 2 finding 2: a construction only pins down
+# where the two names stand RELATIVE TO ITS OWN SPAN; reading "the first occurrence in
+# the quote" let a successor named again in an unrelated heading clause stand in for
+# the occurrence that actually sits next to the construction.
+#
+# Each entry: construction name → (old's slot, new's slot). A slot is "before" (name's
+# occurrence starts before the span), "inside" (occurrence overlaps the span) or
+# "after" (occurrence starts at or after the span ends). Anything not listed here does
+# not fix an order and is refused — see the module docstring for the constructions that
+# read backwards depending on the sentence around them.
+_SLOT_TABLE: dict[str, tuple[str, str]] = {
+    "やめる": ("before", "after"),
+    "廃止": ("before", "after"),
+    "に代えて": ("before", "after"),
+    "→": ("before", "after"),
+    "superseded by": ("before", "after"),
+    "に置き換え": ("before", "before"),
+    "に変更": ("before", "before"),
+    "replace … with": ("inside", "after"),
+    "やめて…で行く": ("before", "inside"),
+    "から…へ": ("before", "inside"),
+    "instead of": ("after", "before"),
+}
+
+# `に置き換え` / `に変更` put BOTH names before the construction (「old を new に変更」),
+# so the slot table alone cannot tell old from new — a slot match by itself would also
+# accept the pair reversed. These two need the extra "old's occurrence precedes new's"
+# check that the other constructions get for free from asymmetric slots.
+_ORDERED_BY_POSITION = {"に置き換え", "に変更"}
 
 
-def _order_of(constructions) -> str | None:
-    """'old-first', 'new-first', or None — None meaning the order is not established.
-
-    A quote carrying constructions from both families, or any construction that does not
-    fix an order, lands on None and is refused.
-    """
-    cs = list(constructions or [])
-    if cs and all(c in _OLD_FIRST for c in cs):
-        return "old-first"
-    if cs and all(c in _NEW_FIRST for c in cs):
-        return "new-first"
-    return None
-
-
-def _at(text: str, name: str) -> int:
-    """Where `name` is named in `text` as a WHOLE name, or -1.
+def _at_all(text: str, name: str) -> list[int]:
+    """Every position `name` is named in `text` as a WHOLE name.
 
     A slug sitting inside a longer slug is not a name — the same rule `transition.py`
     applies. CJK titles carry no ASCII word boundary, so for those containment is the
-    rule there too.
+    rule there too. All occurrences, not just the first: a construction's span can sit
+    next to a LATER mention while an earlier, unrelated one is what "first" would find.
     """
     name = _norm(name).strip()
     if not name:
-        return -1
+        return []
     pat = (rf"(?<![0-9A-Za-z_\-]){re.escape(name)}(?![0-9A-Za-z_\-])"
            if _ASCII.match(name) else re.escape(name))
-    m = re.search(pat, text)
-    return m.start() if m else -1
+    return [m.start() for m in re.finditer(pat, text)]
 
 
-def _where(text: str, slug: str, title: str) -> int:
-    """Where this memory is named — by slug or by title, whichever comes first. -1 if
-    it is not named at all. Order cannot be read off a name that has no position."""
-    hits = [p for p in (_at(text, slug), _at(text, title or "")) if p >= 0]
-    return min(hits) if hits else -1
+def _where_all(text: str, slug: str, title: str) -> list[int]:
+    """Every position this memory is named, by slug or by title. Empty if it is not
+    named at all — order cannot be read off a name that has no position."""
+    return sorted(_at_all(text, slug) + _at_all(text, title or ""))
+
+
+def _construction_spans(text: str, allowed: set[str]) -> list[tuple[str, tuple[int, int]]]:
+    """Every occurrence of a construction in `allowed`, with its span.
+
+    Read off `transition.py`'s own tables rather than a second copy of the patterns: a
+    construction added there must not silently mean nothing here. All occurrences, in
+    case the same construction fires twice in one quote.
+    """
+    out: list[tuple[str, tuple[int, int]]] = []
+    for name, pat in (*_REPLACEMENT, *_RETIREMENT):
+        if name not in allowed:
+            continue
+        for m in re.finditer(pat, text):
+            out.append((name, m.span()))
+    return out
+
+
+def _slot(pos: int, span: tuple[int, int]) -> str:
+    """Where `pos` stands relative to `span`: before it, inside it, or after it."""
+    start, end = span
+    if pos < start:
+        return "before"
+    if pos < end:
+        return "inside"
+    return "after"
 
 
 def _names_in(text: str, titles: dict[str, str]) -> list[str]:
     """The store's memories this text names, by slug or by exact index title."""
     low = _norm(text)
-    return [slug for slug, title in titles.items() if _where(low, slug, title) >= 0]
+    return [slug for slug, title in titles.items() if _where_all(low, slug, title)]
 
 
 def _accept(text: str, old: str, new: str, titles: dict[str, str]) -> dict | None:
@@ -150,20 +199,35 @@ def _accept(text: str, old: str, new: str, titles: dict[str, str]) -> dict | Non
                         {"slug": new, "title": titles.get(new, "")})
     if not (r and r.get("kind") == "superseded"):
         return None
-    order = _order_of(r.get("constructions"))
-    if order is None:
+    matched = r.get("constructions") or []
+    ordering = {c for c in matched if c in _SLOT_TABLE}
+    if not ordering:
         return {"skipped": "direction not established by the construction",
-                "names": [old, new], "constructions": r.get("constructions"),
+                "names": [old, new], "constructions": matched,
                 "quote": text.strip()[:120]}
     low = _norm(text)
-    po, pn = _where(low, old, titles.get(old, "")), _where(low, new, titles.get(new, ""))
-    if po < 0 or pn < 0:
+    old_pos = _where_all(low, old, titles.get(old, ""))
+    new_pos = _where_all(low, new, titles.get(new, ""))
+    if not old_pos or not new_pos:
         return {"skipped": "a name has no position", "names": [old, new],
                 "quote": text.strip()[:120]}
-    if (po < pn) != (order == "old-first"):
-        return None                       # the same text read backwards
-    return {"old": old, "new": new, "quote": r["quote"],
-            "constructions": r.get("constructions")}
+    # Every occurrence of every ordering construction is a separate chance to satisfy
+    # the pair — one construction, one span, but names can occur several times and only
+    # the occurrence beside THIS span speaks for it (see the module-level comment on
+    # `_at_all`).
+    for name, span in _construction_spans(low, ordering):
+        old_slot, new_slot = _SLOT_TABLE[name]
+        for po in old_pos:
+            if _slot(po, span) != old_slot:
+                continue
+            for pn in new_pos:
+                if _slot(pn, span) != new_slot:
+                    continue
+                if name in _ORDERED_BY_POSITION and not (po < pn):
+                    continue
+                return {"old": old, "new": new, "quote": r["quote"],
+                        "constructions": matched}
+    return None                           # no occurrence pair fits any matched slot
 
 
 def _prove(text: str, titles: dict[str, str], seen: set) -> list[dict]:
@@ -202,10 +266,12 @@ def _prove_window(units: list[str], titles: dict[str, str], seen: set) -> list[d
         old, new = na[0], nb[0]
         if (old, new) in seen:
             continue
-        # The construction must live in the second sentence, beside the successor. A
-        # retirement stated in the first and a bare mention in the second is not one
-        # instruction, however adjacent the two are.
-        if _order_of(_constructions_in(b)) != "old-first":
+        # The construction must live in the second sentence, beside the successor, and
+        # it must be one that fixes an order at all. A retirement stated in the first
+        # and a bare mention in the second is not one instruction, however adjacent the
+        # two are; nor is a construction (`switch to`, bare `instead`, …) that this
+        # sentence alone could not settle a direction with.
+        if not any(c in _SLOT_TABLE for c in _constructions_in(b)):
             continue
         hit = _accept(" ".join(units), old, new, titles)
         if hit is None:
@@ -250,13 +316,24 @@ def proven(segments, titles: dict[str, str]) -> list[dict]:
     return out
 
 
-def _write_manifest(store, quote: str, source: str, key: str, gate_version: int) -> str:
-    """The lane's evidence, content-addressed the same way the distiller's is.
+def _write_manifest(store, quote: str, source: str, key: str,
+                     gate_version: int) -> str | None:
+    """The lane's evidence, content-addressed the same way the distiller's is, or None
+    if the store no longer resolves to the directory it was opened on.
+
+    `Store.retire` re-runs `_substitution_refusal()` too, but by the time it does the
+    evidence file would already be on disk — through whatever `store.path` now points
+    at, since a symlink swap makes `os.path.join(store.path, ...)` write outside the
+    store without any error along the way. Checking here, before the first byte, is the
+    only place that can refuse before that write happens; `Store.retire`'s copy of the
+    same check is defence for the direct `retire` CLI path, not redundant with this one.
 
     One USER quote, verbatim, and where it was read from. `Store.retire` re-runs its
     relation against this file, so nothing here is trusted on the strength of having
     been written by us.
     """
+    if store._substitution_refusal() is not None:
+        return None
     manifest = {
         "gate_version": gate_version,
         "kind": LANE_KIND,
@@ -276,6 +353,19 @@ def _write_manifest(store, quote: str, source: str, key: str, gate_version: int)
             f.write(blob)
         os.replace(tmp, path)
     return digest
+
+
+def _candidates(store) -> dict[str, str]:
+    """slug → its index title (or "" if it has none), for every slug the store holds.
+
+    `store.titles()` is title → slug, so two memories sharing one index title collapse
+    to a single dict entry and the other's slug never appears as a key — it becomes
+    permanently unreachable as an `old` or `new` here, while the watermark still walks
+    past whatever instruction named it. `slug_set()` is the universe this lane must
+    face; a title is only an extra way to be named, layered on afterward.
+    """
+    by_slug = {sl: t for t, sl in store.titles().items()}
+    return {slug: by_slug.get(slug, "") for slug in store.slug_set()}
 
 
 def _start_marks(scratch: str, real: str, dis, files: list[str],
@@ -324,7 +414,7 @@ def run_lane(dis, session: str | None = None, *, dry_run: bool = False,
     faced, refused, skipped, read = [], [], [], 0
     try:
         lane = _start_marks(scratch, real, dis, files, from_start)
-        titles = {sl: t for t, sl in store.titles().items()}
+        titles = _candidates(store)
 
         while True:
             c = lane.claim(files, dis.chunk_chars, 1)   # 1: no meal is too small here
@@ -346,6 +436,10 @@ def run_lane(dis, session: str | None = None, *, dry_run: bool = False,
                     faced.append({**hit, "dry_run": True})
                     continue
                 hexd = _write_manifest(store, hit["quote"], c.path, k, GATE_VERSION)
+                if hexd is None:
+                    refused.append({"old": hit["old"], "new": hit["new"],
+                                    "error": store._substitution_refusal()["error"]})
+                    continue
                 r = store.retire(hit["old"], hit["new"], hexd)
                 if r.get("ok"):
                     faced.append({"old": hit["old"], "new": hit["new"],

@@ -5,10 +5,16 @@ strength of a NONDIRECTIONAL relation, so a wrong direction here rewrites the ma
 most-read line to say a living memory is dead. Every test below whose name starts "not"
 is guarding a way that was actually possible before the code under it existed; the ones
 marked (review) were found by Codex review of the first version, not by the dry run.
+
+The block at the bottom (marked "round 2") is this fixer's own coverage of the four
+findings `tests/test_round2_gate.py` grades against — added alongside the gate, not
+instead of it, since the gate is not mine to edit.
 """
+import os
 from types import SimpleNamespace
 
-from distill_kura.distill.retire_lane import MAX_NAMES, proven, run_lane
+from distill_kura.distill.retire_lane import (MAX_NAMES, _candidates,
+                                              _write_manifest, proven, run_lane)
 
 TITLES = {
     "old-way": "The old way",
@@ -144,3 +150,99 @@ def test_a_frozen_store_is_asked_before_the_first_byte():
     r = run_lane(dis)
     assert r["ok"] is False and "frozen" in r["error"]
     assert r["faced"] == [] and r["segments"] == 0
+
+
+# ── round 2, my own coverage of the four findings (the gate is not mine to edit) ──
+
+def test_ni_henkou_needs_old_to_precede_new_not_just_both_before_the_verb():
+    """`に変更` / `に置き換え` put BOTH names before the construction ("old を new に変更
+    する"), so the slot table alone cannot tell old from new the way an asymmetric slot
+    pair (before/after) can — it needs the extra "old's occurrence precedes new's" check.
+    Without it, "new-way を old-way に変更する。" (which actually changes new-way INTO
+    old-way) would read the same as the honest sentence and retire the wrong one."""
+    honest = proven(user("old-way を new-way に変更する。"), TITLES)
+    assert pairs(honest) == [("old-way", "new-way")]
+
+    backwards = proven(user("new-way を old-way に変更する。"), TITLES)
+    assert ("old-way", "new-way") not in pairs(backwards)
+
+
+def test_a_span_only_speaks_for_the_occurrence_beside_it_not_a_stray_earlier_one():
+    """`やめて…で行く` fixes old-before/new-inside relative to ITS OWN span. A quote that
+    names the successor once, far outside any construction's span, and then again where
+    the construction actually reaches must still be read off the second occurrence —
+    same shape as the gate's `replace … with` case, exercised here against a different
+    construction so the span logic is not just proven for one table entry."""
+    text = "new-way か、それは置いといて、old-way はやめて new-way で行く。"
+    out = proven(user(text), TITLES)
+    assert pairs(out) == [("old-way", "new-way")]
+
+
+def test_write_manifest_leaves_existing_evidence_untouched_when_refused(tmp_path):
+    """Containment is checked before the first byte, and that has to mean before ANY
+    filesystem side effect — including one that would look harmless next to files
+    already there. Pre-seed `_evidence` with an unrelated file and confirm a refused
+    write adds nothing beside it (the gate only checks that `_evidence/` is absent for
+    an empty store; this checks a non-empty one is not touched either)."""
+    ev_dir = tmp_path / "_evidence"
+    ev_dir.mkdir()
+    (ev_dir / "already-there.json").write_text("{}", encoding="utf-8")
+
+    class Substituted:
+        name = "stub"
+        path = str(tmp_path)
+
+        def _substitution_refusal(self):
+            return {"ok": False, "error": "no longer resolves"}
+
+    assert _write_manifest(Substituted(), "q", "src.jsonl", "k", 1) is None
+    assert sorted(p.name for p in ev_dir.iterdir()) == ["already-there.json"]
+
+
+def test_a_titled_slug_that_collides_with_another_is_still_a_candidate():
+    """(mine, alongside the gate's own version of this finding) Three slugs, two of them
+    sharing one index title: `store.titles()` alone can name only one slug per title, so
+    the collision must not cost a THIRD, unrelated slug its place either — `_candidates`
+    has to be built from the whole `slug_set()`, not patched per collision."""
+    class ThreeSlugsTwoShareATitle:
+        def slug_set(self):
+            return frozenset({"slug-a", "slug-b", "slug-c"})
+
+        def titles(self):
+            return {"shared title": "slug-b", "solo title": "slug-c"}
+
+    c = _candidates(ThreeSlugsTwoShareATitle())
+    assert set(c) == {"slug-a", "slug-b", "slug-c"}
+    assert c["slug-a"] == ""              # no title reaches it; the slug still counts
+    assert c["slug-b"] == "shared title"
+    assert c["slug-c"] == "solo title"
+
+
+def test_cli_retire_lane_on_a_frozen_store_creates_no_drafts_directory(tmp_path):
+    """The CLI's own frozen check has to fire before `_distiller()` runs, because
+    `Distiller.__init__` ends with `os.makedirs(self.drafts_dir, exist_ok=True)` — a
+    write, unconditional, on the store it is handed. `Store.init_files()` already makes
+    `_still` itself (so that alone cannot tell the two branches apart); `_still/drafts`
+    only exists once a `Distiller` has been built, so its absence here is the CLI's
+    frozen check firing before that construction, driven through `cli.main` rather than
+    `run_lane` directly so a regression that moves the check elsewhere shows up too."""
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from distill_kura import cli
+    from distill_kura.store import Store
+
+    f = Store(name="f", path=str(tmp_path / "f"), label="f")
+    f.init_files()
+    assert not (tmp_path / "f" / "_still" / "drafts").exists()   # sanity: not there yet
+    cfg = tmp_path / "kura.toml"
+    cfg.write_text(f"""
+default = "f"
+[stores.f]
+path = "{f.path}"
+write_policy = "frozen"
+""", encoding="utf-8")
+
+    code = cli.main(["-c", str(cfg), "-s", "f", "retire-lane", "--dry-run"])
+    assert code == 1
+    assert not (tmp_path / "f" / "_still" / "drafts").exists()
