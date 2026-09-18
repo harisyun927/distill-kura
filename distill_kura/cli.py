@@ -218,6 +218,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="the evidence manifest, sha256:<hex> or the bare hex; it must "
                         "carry a [USER] quote naming the old memory")
 
+    p = sub.add_parser("retire-lane",
+                       help="face every retirement the human's own sentences prove — "
+                            "no model, no minimum, its own watermark")
+    p.add_argument("--session", help="only journals whose path contains this")
+    p.add_argument("--dry-run", action="store_true",
+                   help="say what would be faced; write nothing")
+    p.add_argument("--from-start", action="store_true",
+                   help="walk the journals from their beginning instead of from where "
+                        "the distiller has already read to")
+
     p = sub.add_parser("profile", help="the learned profile of a store (the wide room)")
     psub = p.add_subparsers(dest="pcmd", required=True)
     psub.add_parser("show", help="state and text of profile.md, and whether a draft waits")
@@ -748,6 +758,13 @@ def main(argv: list[str] | None = None) -> int:
         r = store.remember_direct(a.slug, a.description, body, a.type, title=a.title,
                                   tags=a.tag, annotations=_annotations_of(a))
         print(json.dumps(r, ensure_ascii=False))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "retire-lane":
+        from .distill.retire_lane import run_lane
+        r = run_lane(_distiller(reg, store), a.session,
+                     dry_run=a.dry_run, from_start=a.from_start)
+        print(json.dumps(r, ensure_ascii=False, indent=1))
         return 0 if r.get("ok") else 1
 
     if a.cmd == "retire":
