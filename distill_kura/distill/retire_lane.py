@@ -47,12 +47,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
 
 from .sources import call_sip, source_for
-from .transition import _SENT, _norm, find_transition
+from .transition import _ASCII, _SENT, _norm, find_transition
 from .watermark import Watermarks
 
 # A stretch naming more names than this is not an instruction, it is a list (an index
@@ -77,11 +78,31 @@ def _order_of(constructions) -> str | None:
     return kinds.pop() if len(kinds) == 1 else None
 
 
+def _at(text: str, name: str) -> int:
+    """Where `name` is named in `text` as a WHOLE name, or -1.
+
+    A slug sitting inside a longer slug is not a name — the same rule `transition.py`
+    applies. Defence in depth, not a caught corruption: measured against the relation, a
+    store holding `new-way` and `new-way-v2` answers `retired-only` for the inner pair,
+    so the wrong successor was already refused one layer down. What this rule buys is
+    that a name which was never named stays out of the candidate list and out of the
+    position check, where a bogus index would otherwise decide a direction. CJK titles
+    carry no ASCII word boundary, so for those containment is the rule there too.
+    """
+    name = _norm(name).strip()
+    if not name:
+        return -1
+    pat = (rf"(?<![0-9A-Za-z_\-]){re.escape(name)}(?![0-9A-Za-z_\-])"
+           if _ASCII.match(name) else re.escape(name))
+    m = re.search(pat, text)
+    return m.start() if m else -1
+
+
 def _names_in(text: str, titles: dict[str, str]) -> list[str]:
     """The store's memories this text names, by slug or by exact index title."""
     low = _norm(text)
     return [slug for slug, title in titles.items()
-            if slug in low or (title and _norm(title) in low)]
+            if _at(low, slug) >= 0 or (title and _at(low, title) >= 0)]
 
 
 def _prove(text: str, titles: dict[str, str], seen: set) -> list[dict]:
@@ -106,7 +127,7 @@ def _prove(text: str, titles: dict[str, str], seen: set) -> list[dict]:
                 out.append({"skipped": "ambiguous direction", "names": [old, new],
                             "quote": text.strip()[:120]})
                 continue
-            if (low.find(_norm(old)) < low.find(_norm(new))) != (order == "old-first"):
+            if (_at(low, old) < _at(low, new)) != (order == "old-first"):
                 continue                  # the same text read backwards
             seen.add((old, new))
             out.append({"old": old, "new": new, "quote": r["quote"],

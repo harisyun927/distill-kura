@@ -95,3 +95,12 @@ def test_the_same_transition_is_reported_once_per_pass():
 def test_a_topic_shift_cannot_supply_the_successor():
     """Defence in depth behind the line unit: `find_transition` cuts the clause itself."""
     assert pairs(proven(user("old-way はやめる。ところで new-way の話だが。"), TITLES)) == []
+
+
+def test_not_a_slug_that_merely_sits_inside_a_longer_slug():
+    """A store holding both `new-way` and `new-way-v2`: naming the second must not read
+    as naming the first. The relation refuses that pair anyway (`retired-only`), so this
+    pins the layer above it — the candidate list and the position check."""
+    titles = {**TITLES, "new-way-v2": "The newer way"}
+    out = proven(user("old-way はやめて、new-way-v2 に置き換える。"), titles)
+    assert pairs(out) == [("old-way", "new-way-v2")]
