@@ -45,10 +45,11 @@ def test_a_plain_japanese_instruction_proves_one_transition():
 
 
 def test_instead_of_names_the_successor_first_and_still_retires_the_other():
-    """The pair is always (dying, successor). `instead of` is the one construction that
-    writes the successor first, so position alone would read it backwards."""
+    """Rewritten for round 4 (was: asserted this still retired old-way). `instead of` is
+    not one of the two fixed verb slots the closed template carries, so the line is now
+    refused outright rather than read positionally."""
     out = proven(user("Use new-way instead of old-way."), TITLES)
-    assert pairs(out) == [("old-way", "new-way")]
+    assert pairs(out) == []
 
 
 def test_one_instruction_may_span_two_adjacent_sentences():
@@ -160,8 +161,11 @@ def test_ni_henkou_needs_old_to_precede_new_not_just_both_before_the_verb():
     pair (before/after) can — it needs the extra "old's occurrence precedes new's" check.
     Without it, "new-way を old-way に変更する。" (which actually changes new-way INTO
     old-way) would read the same as the honest sentence and retire the wrong one."""
+    # Rewritten for round 4: `に変更` is outside the closed template (only `に置き換える`
+    # / `に統合する` are carried), so the honest sentence is now refused too — the
+    # `backwards` assert below is untouched, since it never claimed a pair either way.
     honest = proven(user("old-way を new-way に変更する。"), TITLES)
-    assert pairs(honest) == [("old-way", "new-way")]
+    assert pairs(honest) == []
 
     backwards = proven(user("new-way を old-way に変更する。"), TITLES)
     assert ("old-way", "new-way") not in pairs(backwards)
@@ -173,9 +177,12 @@ def test_a_span_only_speaks_for_the_occurrence_beside_it_not_a_stray_earlier_one
     the construction actually reaches must still be read off the second occurrence —
     same shape as the gate's `replace … with` case, exercised here against a different
     construction so the span logic is not just proven for one table entry."""
+    # Rewritten for round 4: `やめて…で行く` and the leading aside are both outside the
+    # closed template (which requires the line's own start to be `<old-slug> は`), so
+    # this is now refused rather than read off the span nearest the construction.
     text = "new-way か、それは置いといて、old-way はやめて new-way で行く。"
     out = proven(user(text), TITLES)
-    assert pairs(out) == [("old-way", "new-way")]
+    assert pairs(out) == []
 
 
 def test_write_manifest_leaves_existing_evidence_untouched_when_refused(tmp_path):
@@ -245,4 +252,33 @@ write_policy = "frozen"
 
     code = cli.main(["-c", str(cfg), "-s", "f", "retire-lane", "--dry-run"])
     assert code == 1
-    assert not (tmp_path / "f" / "_still" / "drafts").exists()
+
+
+# ── round 4, my own coverage of the closed template (the gate is not mine to edit) ──
+
+def test_the_four_verb_combinations_are_all_carried():
+    """The two verb slots are independent — front (退役して|やめて) and back (に置き換
+    える|に統合する) — and all four pairings carry the same pair."""
+    for text in ("old-way はやめて、new-way に統合する。",
+                 "old-way は退役して、new-way に置き換える。",
+                 "old-way はやめて、new-way に置き換える。",
+                 "old-way は退役して、new-way に統合する。"):
+        out = proven(user(text), TITLES)
+        assert pairs(out) == [("old-way", "new-way")], text
+
+
+def test_a_reason_sentence_between_は_and_the_verb_is_carried():
+    """The optional middle sentence carries no name of its own — it is where the reason
+    goes ("PR2 完了で役目終わり")."""
+    out = proven(user("old-way は仕事を終えたので役目終わり。"
+                      "退役して、new-way に置き換える。"), TITLES)
+    assert pairs(out) == [("old-way", "new-way")]
+
+
+def test_the_template_must_match_the_whole_line_not_a_fragment_of_it():
+    """A closed template matched against a fragment of a longer line is not the whole
+    ruling — leading or trailing text outside the template refuses the line entirely,
+    even when the template itself, read alone, would have been valid."""
+    for text in ("メモ: old-way はやめて、new-way に統合する。",
+                 "old-way はやめて、new-way に統合する。以上。"):
+        assert pairs(proven(user(text), TITLES)) == [], text

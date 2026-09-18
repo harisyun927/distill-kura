@@ -18,54 +18,45 @@ So this lane carries exactly that traffic and nothing else:
   · it reads with its OWN watermark, so it can never consume material the distiller
     needs, and the distiller can never consume material it needs;
   · it has NO minimum — one sentence is a whole meal here;
-  · it calls NO model. The lane is `find_transition`, which is deterministic Python.
-    This is not a shortcut around the gate; it is the gate, reached sooner.
+  · it calls NO model. What decides is deterministic Python, next.
 
-`find_transition` is NONDIRECTIONAL by design — it asks only that ONE quote carry both
-names and a construction that says a change, and `Store.retire` re-runs that same
-nondirectional relation. The distiller never needs more, because the NEW memory is the
-one it just poured: direction comes from outside, set by code. A lane reading a journal
-has no such anchor and must establish direction itself, and everything it writes is
-accepted by `Store.retire` on the strength of that. So the whole design here is about
-refusing rather than guessing:
+── why this file stopped reading word order (round 4, 2026-09-18) ────────────────────
 
-  · **Only constructions whose word order is fixed are carried, and "fixed" is decided
-    per construction, against ITS OWN SPAN — not once for the whole quote.** `に置き換え`,
-    `→`, `replace … with`, `superseded by` and the Japanese retirement verbs (`やめる`,
-    `廃止`) always stand the two names in the same places relative to the construction;
-    `instead of` always reverses them. `switch to`, `now use`, `代わりに`, `今後は`, a bare
-    `instead`, and — this is round 2's finding — the ENGLISH retirement verbs (`stop`,
-    `drop`, `retire`, `done with`) do NOT fix an order: Japanese `やめる` puts the dying
-    thing BEFORE the verb (`old-way をやめる`) but English puts it AFTER (`retire
-    old-way`), so folding both into one "old-first" family read "Use new-way; retire
-    old-way." backwards and would have retired the survivor. A quote resting only on a
-    construction outside the table is refused, not guessed at. (Round 1 found `switch
-    to` / `now use` / `代わりに` / `今後は` / bare `instead`; round 2 found the English
-    retirement verbs, plus that a matched construction only speaks for the occurrences
-    beside its own span — see `_construction_spans` / `_slot`.)
+Three review rounds found thirteen holes in this lane, and every one of them came from
+the same place: reading DIRECTION off the order and position of words in a free-form
+sentence. Negation ("やめない"), a different subject ("予備サーバーは退役した"), a
+heading mention, the passive, `instead of`, and one name nested inside another all
+defeat that reading — and three independent implementers, writing the fix
+independently across three rounds, fell into the same holes each time. The holes were
+never in any one implementation; they were in the METHOD. Free text does not carry
+enough structure for position-and-order to recover direction reliably, and no amount of
+patching the reading (a slot table, a span-scoping rule, a two-sentence fallback) closes
+that gap for good — round 3's fix was exactly such a patch, and round 4 found new holes
+in it.
 
-  · **Both names must be locatable, at EVERY occurrence, not just the first.** Order is
-    decided by position, so a name that is present by TITLE while the check looks only
-    for the SLUG has no position at all — two missing positions compare equal, which let
-    both orientations pass and would have retired a pair reciprocally. And a name that
-    the construction's span sits beside may not be its FIRST mention in the quote: round
-    2's other finding was a heading clause ("Regarding new-way: stop old-way and replace
-    it with new-way.") whose leading, unrelated mention of the successor came before the
-    construction that actually fixed the order — reading "first occurrence" made the
-    pair look reversed. `_where_all` returns every occurrence of slug and title alike,
-    and a name with none of them is a refusal.
+So round 4 does not patch the reading again. It removes it. The lane now carries exactly
+ONE closed template, matched against the WHOLE line (`re.fullmatch`, in effect):
 
-  · **Two names in a line are not a transition.** Sentence by sentence is the safe read;
-    the instruction that started this is written "OLD は …役目終わり。退役して、NEW に
-    置き換える。" — two sentences, one instruction — so a line that proves nothing
-    sentence-wise gets ONE more chance, in the narrowest shape that carries it: the two
-    sentences that name a memory WITH NOTHING NAMED BETWEEN THEM, the first naming only
-    the old, the second naming only the new AND carrying the construction.
-    "old-way is retired. new-way is nice." fails that (the construction is in the first
-    sentence), where a plain two-names-in-the-line fallback would have stitched them
-    together and retired old-way. "Adjacent" was too strict to be that rule: `§12.5`
-    ends a sentence at its decimal point, which put one real instruction three units
-    apart and lost it.
+    <old-slug> は [one sentence naming no candidate slug。] (退役して|やめて)、
+    <new-slug> (に置き換える|に統合する)[。]
+
+`<old-slug>` and `<new-slug>` are read only as the store's own slugs — never as titles,
+never as a slug sitting inside a longer one — and direction is not inferred from
+anything: it is simply which side of the template's own two fixed slots each name sits
+in. A line that is not exactly this template proves nothing, however plausible it
+reads; the person who wants anything else retired says so through `kura retire`, which
+was always the explicit door. A line that names two or more candidate memories without
+matching the template says so out loud (`skipped: "direction not established by the
+construction"`) rather than staying silent, so the person can go use that door.
+
+After the template decides the pair, `find_transition` is still called as an
+independent sanity receipt — the same nondirectional relation `Store.retire` re-runs on
+the manifest this lane writes. It is not a second vote on direction (`find_transition`
+never reads direction at all; see its own docstring), only a check that nothing about
+the line actively contradicts what the template found. Its own construction vocabulary
+is narrower than this template's two Japanese retirement/replacement phrasings, so it
+sometimes has nothing to add — that is expected, not a disagreement, and the template's
+own match stands on its own.
 
 Nothing is written on a frozen store, including the lane's own watermark: the policy is
 asked before the first byte, not by `Store.retire` after the evidence file already
@@ -87,8 +78,7 @@ from datetime import datetime, timezone
 
 from ..store import FROZEN
 from .sources import call_sip, source_for
-from .transition import (_ASCII, _REPLACEMENT, _RETIREMENT, _SENT, _norm,
-                         find_transition)
+from .transition import _norm, find_transition
 from .watermark import Watermarks
 
 # A stretch naming more names than this is not an instruction, it is a list (an index
@@ -98,205 +88,109 @@ MAX_NAMES = 8
 
 LANE_KIND = "retirement-lane"
 
-# Direction is a property of ONE MATCHED CONSTRUCTION's span, not of the quote as a
-# whole. Round 2 finding 1: a bare retirement verb does not fix word order the way the
-# module docstring claimed — English puts the object AFTER the verb (`retire old-way`),
-# Japanese `やめる` puts it BEFORE (`old-way をやめる`) — so folding both into one
-# "old-first" family made `retire old-way` (successor named first) read as old-first
-# and would have retired the survivor. Round 2 finding 2: a construction only pins down
-# where the two names stand RELATIVE TO ITS OWN SPAN; reading "the first occurrence in
-# the quote" let a successor named again in an unrelated heading clause stand in for
-# the occurrence that actually sits next to the construction.
-#
-# Each entry: construction name → (old's slot, new's slot). A slot is "before" (name's
-# occurrence starts before the span), "inside" (occurrence overlaps the span) or
-# "after" (occurrence starts at or after the span ends). Anything not listed here does
-# not fix an order and is refused — see the module docstring for the constructions that
-# read backwards depending on the sentence around them.
-_SLOT_TABLE: dict[str, tuple[str, str]] = {
-    "やめる": ("before", "after"),
-    "廃止": ("before", "after"),
-    "に代えて": ("before", "after"),
-    "→": ("before", "after"),
-    "superseded by": ("before", "after"),
-    "に置き換え": ("before", "before"),
-    "に変更": ("before", "before"),
-    "replace … with": ("inside", "after"),
-    "やめて…で行く": ("before", "inside"),
-    "から…へ": ("before", "inside"),
-    "instead of": ("after", "before"),
-}
-
-# `に置き換え` / `に変更` put BOTH names before the construction (「old を new に変更」),
-# so the slot table alone cannot tell old from new — a slot match by itself would also
-# accept the pair reversed. These two need the extra "old's occurrence precedes new's"
-# check that the other constructions get for free from asymmetric slots.
-_ORDERED_BY_POSITION = {"に置き換え", "に変更"}
+# ── the one closed template ──────────────────────────────────────────────────────────
+# Matched against the whole line, not a fragment of it. Space (half- or full-width; NFKC
+# folds the latter to the former in `_norm`) may sit between a name and its particle, and
+# nowhere else the pattern does not already allow for.
+_WS = r" *"
+_SLUG = r"[0-9a-z_\-]+"
+_TEMPLATE = re.compile(
+    rf"^(?P<old>{_SLUG}){_WS}は{_WS}"
+    rf"(?:(?P<reason>[^。\n]+。){_WS})?"
+    rf"(?:退役して|やめて)、{_WS}"
+    rf"(?P<new>{_SLUG}){_WS}"
+    rf"(?:に置き換える|に統合する)"
+    rf"。?$"
+)
 
 
-def _at_all(text: str, name: str) -> list[int]:
-    """Every position `name` is named in `text` as a WHOLE name.
+def _names_slug(text: str, slug: str) -> bool:
+    """Whole-token presence of `slug` in already-`_norm`-ed `text`.
 
-    A slug sitting inside a longer slug is not a name — the same rule `transition.py`
-    applies. CJK titles carry no ASCII word boundary, so for those containment is the
-    rule there too. All occurrences, not just the first: a construction's span can sit
-    next to a LATER mention while an earlier, unrelated one is what "first" would find.
+    A slug sitting inside a longer slug is not a name (`new-way` inside `new-way-v2`),
+    so the check needs the same word-boundary the store itself enforces on slugs.
     """
-    name = _norm(name).strip()
-    if not name:
-        return []
-    pat = (rf"(?<![0-9A-Za-z_\-]){re.escape(name)}(?![0-9A-Za-z_\-])"
-           if _ASCII.match(name) else re.escape(name))
-    return [m.start() for m in re.finditer(pat, text)]
+    pat = rf"(?<![0-9a-z_\-]){re.escape(slug.lower())}(?![0-9a-z_\-])"
+    return re.search(pat, text) is not None
 
 
-def _where_all(text: str, slug: str, title: str) -> list[int]:
-    """Every position this memory is named, by slug or by title. Empty if it is not
-    named at all — order cannot be read off a name that has no position."""
-    return sorted(_at_all(text, slug) + _at_all(text, title or ""))
+def _named_slugs(line: str, candidates: dict[str, str]) -> list[str]:
+    """Every candidate SLUG this line names, by literal presence. Titles do not count:
+    the template can only ever point at a slug, so neither does the count that decides
+    whether a non-matching line deserves a loud refusal or silence."""
+    low = _norm(line)
+    return [slug for slug in candidates if _names_slug(low, slug)]
 
 
-def _construction_spans(text: str, allowed: set[str]) -> list[tuple[str, tuple[int, int]]]:
-    """Every occurrence of a construction in `allowed`, with its span.
-
-    Read off `transition.py`'s own tables rather than a second copy of the patterns: a
-    construction added there must not silently mean nothing here. All occurrences, in
-    case the same construction fires twice in one quote.
-    """
-    out: list[tuple[str, tuple[int, int]]] = []
-    for name, pat in (*_REPLACEMENT, *_RETIREMENT):
-        if name not in allowed:
-            continue
-        for m in re.finditer(pat, text):
-            out.append((name, m.span()))
-    return out
-
-
-def _slot(pos: int, span: tuple[int, int]) -> str:
-    """Where `pos` stands relative to `span`: before it, inside it, or after it."""
-    start, end = span
-    if pos < start:
-        return "before"
-    if pos < end:
-        return "inside"
-    return "after"
-
-
-def _names_in(text: str, titles: dict[str, str]) -> list[str]:
-    """The store's memories this text names, by slug or by exact index title."""
-    low = _norm(text)
-    return [slug for slug, title in titles.items() if _where_all(low, slug, title)]
-
-
-def _accept(text: str, old: str, new: str, titles: dict[str, str]) -> dict | None:
-    """The proof that THIS text retires `old` in favour of `new`, or None.
-
-    `find_transition` decides whether a transition is said at all; this decides whether
-    it is said in that direction, and refuses when it cannot tell.
-    """
-    r = find_transition([{"class": "USER", "text": text}],
-                        {"slug": old, "title": titles.get(old, "")},
-                        {"slug": new, "title": titles.get(new, "")})
-    if not (r and r.get("kind") == "superseded"):
+def _match_template(line: str, candidates: dict[str, str]) -> tuple[str, str] | None:
+    """The (old, new) slugs this line's WHOLE text proves under the closed template, or
+    None if it is not an exact match — a valid-looking fragment inside a longer line is
+    not the person's whole ruling."""
+    low = _norm(line)
+    m = _TEMPLATE.match(low)
+    if not m:
         return None
-    matched = r.get("constructions") or []
-    ordering = {c for c in matched if c in _SLOT_TABLE}
-    if not ordering:
-        return {"skipped": "direction not established by the construction",
-                "names": [old, new], "constructions": matched,
-                "quote": text.strip()[:120]}
-    low = _norm(text)
-    old_pos = _where_all(low, old, titles.get(old, ""))
-    new_pos = _where_all(low, new, titles.get(new, ""))
-    if not old_pos or not new_pos:
-        return {"skipped": "a name has no position", "names": [old, new],
-                "quote": text.strip()[:120]}
-    # Every occurrence of every ordering construction is a separate chance to satisfy
-    # the pair — one construction, one span, but names can occur several times and only
-    # the occurrence beside THIS span speaks for it (see the module-level comment on
-    # `_at_all`).
-    for name, span in _construction_spans(low, ordering):
-        old_slot, new_slot = _SLOT_TABLE[name]
-        for po in old_pos:
-            if _slot(po, span) != old_slot:
-                continue
-            for pn in new_pos:
-                if _slot(pn, span) != new_slot:
-                    continue
-                if name in _ORDERED_BY_POSITION and not (po < pn):
-                    continue
-                return {"old": old, "new": new, "quote": r["quote"],
-                        "constructions": matched}
-    return None                           # no occurrence pair fits any matched slot
+    by_lower = {slug.lower(): slug for slug in candidates}
+    old = by_lower.get(m.group("old"))
+    new = by_lower.get(m.group("new"))
+    if not old or not new or old == new:
+        return None                        # unknown slug, or a memory "succeeding" itself
+    reason = m.group("reason")
+    if reason and any(_names_slug(reason, slug) for slug in candidates):
+        return None                        # the reason clause is not about a third memory
+    return old, new
 
 
-def _prove(text: str, titles: dict[str, str], seen: set) -> list[dict]:
-    """Every transition this one stretch proves, direction decided. Pure."""
-    named = _names_in(text, titles)
-    if len(named) > MAX_NAMES:
-        return [{"skipped": "too many names", "names": len(named),
-                 "quote": text.strip()[:120]}]
-    out: list[dict] = []
-    for old in named:
-        for new in named:
-            if old == new or (old, new) in seen:
-                continue
-            hit = _accept(text, old, new, titles)
-            if hit is None:
-                continue
-            if "old" in hit:
-                seen.add((old, new))
-            out.append(hit)
-    return out
+def _accept(line: str, old: str, new: str, candidates: dict[str, str]) -> dict:
+    """The template has already decided the pair; this re-runs the same nondirectional
+    relation `Store.retire` re-runs on the manifest, as an independent receipt — never a
+    second vote on direction, since `find_transition` does not read direction at all.
 
-
-def _prove_window(units: list[str], titles: dict[str, str], seen: set) -> list[dict]:
-    """The one widening allowed: the two sentences that name a memory with nothing named
-    between them, one name each, and the construction in the second. See the module
-    docstring for why nothing wider is safe."""
-    out: list[dict] = []
-    named = [(i, _names_in(u, titles)) for i, u in enumerate(units)]
-    speaking = [(i, ns) for i, ns in named if ns]        # units that name anything
-    for (ia, na), (ib, nb) in zip(speaking, speaking[1:]):
-        # Nothing is named between them — that is what `speaking` being consecutive
-        # means, and it is the guarantee the adjacency test was reaching for.
-        if len(na) != 1 or len(nb) != 1 or na[0] == nb[0]:
-            continue
-        b = units[ib]
-        old, new = na[0], nb[0]
-        if (old, new) in seen:
-            continue
-        # The construction must live in the second sentence, beside the successor, and
-        # it must be one that fixes an order at all. A retirement stated in the first
-        # and a bare mention in the second is not one instruction, however adjacent the
-        # two are; nor is a construction (`switch to`, bare `instead`, …) that this
-        # sentence alone could not settle a direction with.
-        if not any(c in _SLOT_TABLE for c in _constructions_in(b)):
-            continue
-        hit = _accept(" ".join(units), old, new, titles)
-        if hit is None:
-            continue
-        if "old" in hit:
-            seen.add((old, new))
-        out.append(hit)
-    return out
-
-
-def _constructions_in(text: str) -> list[str]:
-    """Which constructions this sentence carries, named the way the relation names them.
-
-    Read off `transition.py`'s own tables rather than a second copy of the patterns: a
-    construction added there must not silently mean nothing here.
+    Its construction vocabulary does not cover every phrasing this template carries
+    (round 4 added `退役して` and `に統合する`, which the general relation does not know),
+    so `None` here is an expected gap, not a disagreement, and the template's own match
+    stands. A `kind` that is neither `None` nor `superseded` WOULD be a genuine
+    contradiction of what the template found, and is refused rather than kept — this
+    should not be reachable given the checks above, but silently trusting that is how a
+    bug becomes a wrong retirement.
     """
-    low = _norm(text)
-    return [name for name, pat in (*_REPLACEMENT, *_RETIREMENT)
-            if re.search(pat, low)]
+    r = find_transition([{"class": "USER", "text": line}],
+                        {"slug": old, "title": candidates.get(old, "")},
+                        {"slug": new, "title": candidates.get(new, "")})
+    kind = r.get("kind") if r else None
+    if kind not in (None, "superseded"):
+        return {"skipped": "construction matched but the independent check disagreed",
+                "names": [old, new], "quote": line.strip()[:120]}
+    quote = r["quote"] if r else line
+    constructions = (r.get("constructions") or []) if r else []
+    return {"old": old, "new": new, "quote": quote, "constructions": constructions}
+
+
+def _judge_line(line: str, candidates: dict[str, str]) -> dict | None:
+    """What this one line proves, refuses loudly, or says nothing about at all."""
+    named = _named_slugs(line, candidates)
+    if len(named) > MAX_NAMES:
+        return {"skipped": "too many names", "names": len(named),
+                "quote": line.strip()[:120]}
+    hit = _match_template(line, candidates)
+    if hit is None:
+        if len(named) >= 2:
+            # Two or more candidate memories named on a line that is not the template:
+            # exactly the case a person should see, so they can say it with the direct
+            # `kura retire` door instead of leaving the AI to guess.
+            return {"skipped": "direction not established by the construction",
+                    "names": named, "quote": line.strip()[:120]}
+        return None                        # ordinary talk; logging it would bury what matters
+    old, new = hit
+    return _accept(line, old, new, candidates)
 
 
 def proven(segments, titles: dict[str, str]) -> list[dict]:
     """Every transition the human's own words prove, one entry per (old, new).
 
-    Pure: no store, no model, no clock. `titles` maps slug → its index title.
+    Pure: no store, no model, no clock. `titles` maps slug → its index title. Each LINE
+    is its own instruction — the template is line-anchored, so there is no sentence
+    splitting left to do and no cross-line stitching to guard against.
     """
     out: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -306,13 +200,15 @@ def proven(segments, titles: dict[str, str]) -> list[dict]:
         for line in (getattr(seg, "text", "") or "").splitlines():
             if not line.strip():
                 continue
-            units = [u for u in _SENT.split(line) if u.strip()]
-            found: list[dict] = []
-            for unit in units:
-                found += _prove(unit, titles, seen)
-            if not any("old" in h for h in found):
-                found += _prove_window(units, titles, seen)
-            out += found
+            hit = _judge_line(line, titles)
+            if hit is None:
+                continue
+            if "old" in hit:
+                pair = (hit["old"], hit["new"])
+                if pair in seen:
+                    continue
+                seen.add(pair)
+            out.append(hit)
     return out
 
 
