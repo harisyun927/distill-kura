@@ -21,26 +21,48 @@ So this lane carries exactly that traffic and nothing else:
   · it calls NO model. The lane is `find_transition`, which is deterministic Python.
     This is not a shortcut around the gate; it is the gate, reached sooner.
 
-Two things this lane must decide that the distiller gets for free:
+`find_transition` is NONDIRECTIONAL by design — it asks only that ONE quote carry both
+names and a construction that says a change, and `Store.retire` re-runs that same
+nondirectional relation. The distiller never needs more, because the NEW memory is the
+one it just poured: direction comes from outside, set by code. A lane reading a journal
+has no such anchor and must establish direction itself, and everything it writes is
+accepted by `Store.retire` on the strength of that. So the whole design here is about
+refusing rather than guessing:
 
-**Which name is dying.** `find_transition` asks only that ONE quote carry both names and
-a construction that says a change; fed "OLD はやめて NEW に統合する" it answers
-`superseded` for both orderings, and correctly so — the distiller supplies the direction
-from outside, because the NEW memory is the one it just poured. Found by this lane's own
-dry run: with no such anchor it faced the surviving memory against the dead one. Hence
-`_NEW_FIRST` and the position check.
+  · **Only constructions whose word order is fixed are carried.** `に置き換え`, `→`,
+    `replace … with`, `superseded by` and the retirement verbs always put the dying
+    thing first; `instead of` always puts the successor first. `switch to`, `now use`,
+    `代わりに`, `今後は` and a bare `instead` do NOT fix an order — "switch to new-way,
+    not old-way" and "new-way を old-way の代わりに使う" both name the successor first —
+    so a quote resting on one of those is refused, not guessed at. (Found by review, not
+    by the dry run: the first version treated everything except `instead*` as old-first
+    and would have written those two backwards.)
 
-**How much text is one instruction.** Per turn is too wide: a turn retiring five memories
-in five lines carries ten names in one quote, and line 1's old memory pairs with line 5's
-successor. Per sentence is too narrow: the instruction that started this is written
-"OLD は …役目終わり。退役して、NEW に置き換える。" — two sentences, one instruction. So the
-unit is the LINE, read sentence-first: a sentence that proves something on its own is the
-answer, and only a line that proves nothing and names exactly two memories is read whole,
-where there is no wrong pair to fall into.
+  · **Both names must be locatable.** Order is decided by position, so a name that is
+    present by TITLE while the check looks only for the SLUG has no position at all.
+    Two missing positions compare equal, which let both orientations pass and would have
+    retired a pair reciprocally. `_where` looks for slug and title alike, and a name it
+    cannot place is a refusal.
 
-The pass always walks a throwaway copy of the marks and merges forward at the end, so a
-dry run cannot eat water it was only asked to look at, and `from_start` genuinely starts
-at the start instead of reporting success against a mark already parked at EOF.
+  · **Two names in a line are not a transition.** Sentence by sentence is the safe read;
+    the instruction that started this is written "OLD は …役目終わり。退役して、NEW に
+    置き換える。" — two sentences, one instruction — so a line that proves nothing
+    sentence-wise gets ONE more chance, in the narrowest shape that carries it: the two
+    sentences that name a memory WITH NOTHING NAMED BETWEEN THEM, the first naming only
+    the old, the second naming only the new AND carrying the construction.
+    "old-way is retired. new-way is nice." fails that (the construction is in the first
+    sentence), where a plain two-names-in-the-line fallback would have stitched them
+    together and retired old-way. "Adjacent" was too strict to be that rule: `§12.5`
+    ends a sentence at its decimal point, which put one real instruction three units
+    apart and lost it.
+
+Nothing is written on a frozen store, including the lane's own watermark: the policy is
+asked before the first byte, not by `Store.retire` after the evidence file already
+exists.
+
+A dry run walks a throwaway copy of the marks, so looking does not consume, and
+`from_start` genuinely starts at the start instead of reporting success against a mark
+already parked at EOF.
 """
 from __future__ import annotations
 
@@ -52,8 +74,10 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 
+from ..store import FROZEN
 from .sources import call_sip, source_for
-from .transition import _ASCII, _SENT, _norm, find_transition
+from .transition import (_ASCII, _REPLACEMENT, _RETIREMENT, _SENT, _norm,
+                         find_transition)
 from .watermark import Watermarks
 
 # A stretch naming more names than this is not an instruction, it is a list (an index
@@ -63,31 +87,35 @@ MAX_NAMES = 8
 
 LANE_KIND = "retirement-lane"
 
-# Which name comes first, per construction. Every construction in `transition.py` puts
-# the dying thing first — "OLD はやめて NEW に統合する", "replace OLD with NEW",
-# "OLD superseded by NEW" — except the two built the other way round: "NEW instead of
-# OLD". A stretch whose constructions disagree is ambiguous and is refused, because
-# guessing here writes the retirement backwards.
-_NEW_FIRST = {"instead of", "instead"}
+# Word order, per construction, and ONLY where the order is a property of the
+# construction rather than of one example sentence. Anything not listed here is refused:
+# see the module docstring for the two that read backwards.
+_OLD_FIRST = {"やめて…で行く", "に代えて", "に変更", "に置き換え", "→", "から…へ",
+              "replace … with", "superseded by",
+              "やめる", "廃止", "stop", "drop", "retire", "done with"}
+_NEW_FIRST = {"instead of"}
 
 
 def _order_of(constructions) -> str | None:
-    """'old-first', 'new-first', or None when the text says both."""
-    kinds = {"new-first" if c in _NEW_FIRST else "old-first"
-             for c in (constructions or [])}
-    return kinds.pop() if len(kinds) == 1 else None
+    """'old-first', 'new-first', or None — None meaning the order is not established.
+
+    A quote carrying constructions from both families, or any construction that does not
+    fix an order, lands on None and is refused.
+    """
+    cs = list(constructions or [])
+    if cs and all(c in _OLD_FIRST for c in cs):
+        return "old-first"
+    if cs and all(c in _NEW_FIRST for c in cs):
+        return "new-first"
+    return None
 
 
 def _at(text: str, name: str) -> int:
     """Where `name` is named in `text` as a WHOLE name, or -1.
 
     A slug sitting inside a longer slug is not a name — the same rule `transition.py`
-    applies. Defence in depth, not a caught corruption: measured against the relation, a
-    store holding `new-way` and `new-way-v2` answers `retired-only` for the inner pair,
-    so the wrong successor was already refused one layer down. What this rule buys is
-    that a name which was never named stays out of the candidate list and out of the
-    position check, where a bogus index would otherwise decide a direction. CJK titles
-    carry no ASCII word boundary, so for those containment is the rule there too.
+    applies. CJK titles carry no ASCII word boundary, so for those containment is the
+    rule there too.
     """
     name = _norm(name).strip()
     if not name:
@@ -98,11 +126,44 @@ def _at(text: str, name: str) -> int:
     return m.start() if m else -1
 
 
+def _where(text: str, slug: str, title: str) -> int:
+    """Where this memory is named — by slug or by title, whichever comes first. -1 if
+    it is not named at all. Order cannot be read off a name that has no position."""
+    hits = [p for p in (_at(text, slug), _at(text, title or "")) if p >= 0]
+    return min(hits) if hits else -1
+
+
 def _names_in(text: str, titles: dict[str, str]) -> list[str]:
     """The store's memories this text names, by slug or by exact index title."""
     low = _norm(text)
-    return [slug for slug, title in titles.items()
-            if _at(low, slug) >= 0 or (title and _at(low, title) >= 0)]
+    return [slug for slug, title in titles.items() if _where(low, slug, title) >= 0]
+
+
+def _accept(text: str, old: str, new: str, titles: dict[str, str]) -> dict | None:
+    """The proof that THIS text retires `old` in favour of `new`, or None.
+
+    `find_transition` decides whether a transition is said at all; this decides whether
+    it is said in that direction, and refuses when it cannot tell.
+    """
+    r = find_transition([{"class": "USER", "text": text}],
+                        {"slug": old, "title": titles.get(old, "")},
+                        {"slug": new, "title": titles.get(new, "")})
+    if not (r and r.get("kind") == "superseded"):
+        return None
+    order = _order_of(r.get("constructions"))
+    if order is None:
+        return {"skipped": "direction not established by the construction",
+                "names": [old, new], "constructions": r.get("constructions"),
+                "quote": text.strip()[:120]}
+    low = _norm(text)
+    po, pn = _where(low, old, titles.get(old, "")), _where(low, new, titles.get(new, ""))
+    if po < 0 or pn < 0:
+        return {"skipped": "a name has no position", "names": [old, new],
+                "quote": text.strip()[:120]}
+    if (po < pn) != (order == "old-first"):
+        return None                       # the same text read backwards
+    return {"old": old, "new": new, "quote": r["quote"],
+            "constructions": r.get("constructions")}
 
 
 def _prove(text: str, titles: dict[str, str], seen: set) -> list[dict]:
@@ -111,28 +172,59 @@ def _prove(text: str, titles: dict[str, str], seen: set) -> list[dict]:
     if len(named) > MAX_NAMES:
         return [{"skipped": "too many names", "names": len(named),
                  "quote": text.strip()[:120]}]
-    low = _norm(text)
     out: list[dict] = []
     for old in named:
         for new in named:
             if old == new or (old, new) in seen:
                 continue
-            r = find_transition([{"class": "USER", "text": text}],
-                                {"slug": old, "title": titles.get(old, "")},
-                                {"slug": new, "title": titles.get(new, "")})
-            if not (r and r.get("kind") == "superseded"):
+            hit = _accept(text, old, new, titles)
+            if hit is None:
                 continue
-            order = _order_of(r.get("constructions"))
-            if order is None:
-                out.append({"skipped": "ambiguous direction", "names": [old, new],
-                            "quote": text.strip()[:120]})
-                continue
-            if (_at(low, old) < _at(low, new)) != (order == "old-first"):
-                continue                  # the same text read backwards
-            seen.add((old, new))
-            out.append({"old": old, "new": new, "quote": r["quote"],
-                        "constructions": r.get("constructions")})
+            if "old" in hit:
+                seen.add((old, new))
+            out.append(hit)
     return out
+
+
+def _prove_window(units: list[str], titles: dict[str, str], seen: set) -> list[dict]:
+    """The one widening allowed: the two sentences that name a memory with nothing named
+    between them, one name each, and the construction in the second. See the module
+    docstring for why nothing wider is safe."""
+    out: list[dict] = []
+    named = [(i, _names_in(u, titles)) for i, u in enumerate(units)]
+    speaking = [(i, ns) for i, ns in named if ns]        # units that name anything
+    for (ia, na), (ib, nb) in zip(speaking, speaking[1:]):
+        # Nothing is named between them — that is what `speaking` being consecutive
+        # means, and it is the guarantee the adjacency test was reaching for.
+        if len(na) != 1 or len(nb) != 1 or na[0] == nb[0]:
+            continue
+        b = units[ib]
+        old, new = na[0], nb[0]
+        if (old, new) in seen:
+            continue
+        # The construction must live in the second sentence, beside the successor. A
+        # retirement stated in the first and a bare mention in the second is not one
+        # instruction, however adjacent the two are.
+        if _order_of(_constructions_in(b)) != "old-first":
+            continue
+        hit = _accept(" ".join(units), old, new, titles)
+        if hit is None:
+            continue
+        if "old" in hit:
+            seen.add((old, new))
+        out.append(hit)
+    return out
+
+
+def _constructions_in(text: str) -> list[str]:
+    """Which constructions this sentence carries, named the way the relation names them.
+
+    Read off `transition.py`'s own tables rather than a second copy of the patterns: a
+    construction added there must not silently mean nothing here.
+    """
+    low = _norm(text)
+    return [name for name, pat in (*_REPLACEMENT, *_RETIREMENT)
+            if re.search(pat, low)]
 
 
 def proven(segments, titles: dict[str, str]) -> list[dict]:
@@ -148,11 +240,12 @@ def proven(segments, titles: dict[str, str]) -> list[dict]:
         for line in (getattr(seg, "text", "") or "").splitlines():
             if not line.strip():
                 continue
+            units = [u for u in _SENT.split(line) if u.strip()]
             found: list[dict] = []
-            for unit in (u for u in _SENT.split(line) if u.strip()):
+            for unit in units:
                 found += _prove(unit, titles, seen)
-            if not found and len(_names_in(line, titles)) == 2:
-                found = _prove(line, titles, seen)
+            if not any("old" in h for h in found):
+                found += _prove_window(units, titles, seen)
             out += found
     return out
 
@@ -160,8 +253,8 @@ def proven(segments, titles: dict[str, str]) -> list[dict]:
 def _write_manifest(store, quote: str, source: str, key: str, gate_version: int) -> str:
     """The lane's evidence, content-addressed the same way the distiller's is.
 
-    One USER quote, verbatim, and where it was read from. `Store.retire` re-runs both
-    relations against this file, so nothing here is trusted on the strength of having
+    One USER quote, verbatim, and where it was read from. `Store.retire` re-runs its
+    relation against this file, so nothing here is trusted on the strength of having
     been written by us.
     """
     manifest = {
@@ -218,6 +311,13 @@ def run_lane(dis, session: str | None = None, *, dry_run: bool = False,
     from .pipeline import GATE_VERSION
 
     store = dis.store
+    # Asked before the first byte. `Store.retire` refuses a frozen store too, but by then
+    # the evidence file is already on disk and the watermark is about to move — a store
+    # whose policy promises that nothing may write would have been written to twice.
+    if getattr(store, "write_policy", None) == FROZEN:
+        return {"ok": False, "error": f"store '{store.name}' is frozen: nothing may write",
+                "segments": 0, "faced": [], "refused": [], "skipped": []}
+
     files = dis.files(session)
     real = os.path.join(dis.still, "retire-watermark.json")
     scratch = tempfile.mkdtemp(prefix="kura-retire-lane-")
