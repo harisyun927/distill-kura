@@ -97,9 +97,11 @@ _RETIREMENT = [
 # demanding the name right after the marker. A Japanese slot may carry a short filler
 # (`old-way の方に統合`) but not a particle that starts a new noun (は・が・を) or a
 # comma; an English slot may carry determiners and modifiers up to the next
-# punctuation. Too loose only withholds proof — the safe direction — never grants it.
-_JGAP = r"[^はがを、。\n]{0,12}"
-_EGAP = r"[^.,;:\n]{0,40}?"
+# punctuation. No length cap on either: a cap is a number a longer modifier walks
+# past, and past it the forward pattern would still match while this one did not.
+# Too loose only withholds proof — the safe direction — never grants it.
+_JGAP = r"[^はがを、。\n]*"
+_EGAP = r"[^.,;:\n]*?"
 _REVERSED = [
     ("やめて…で行く", rf"{{old}}{_JGAP}(?:で|に)(?:行く|いく|する)"),
     ("に代えて", rf"{{new}}{_JGAP}に代えて"),
@@ -111,8 +113,8 @@ _REVERSED = [
     ("から…へ", rf"{{new}}{_JGAP}から"),
     ("instead of", rf"\binstead of\s+{_EGAP}{{new}}"),
     ("instead", rf"{{old}}\s+{_EGAP}\binstead\b"),
-    ("replace … with", rf"\breplac(?:e|ed|es|ing)\s+(?:(?!\bwith\b)[^.,;:\n]){{0,60}}?"
-                       rf"{{new}}\b(?:(?!\bwith\b)[^.,;:\n]){{0,60}}?\bwith\b"),
+    ("replace … with", r"\breplac(?:e|ed|es|ing)\s+(?:(?!\bwith\b)[^.,;:\n])*?"
+                       r"{new}\b(?:(?!\bwith\b)[^.,;:\n])*?\bwith\b"),
     ("switch to", rf"\bswitch(?:ed|es|ing)?\s+to\s+{_EGAP}{{old}}"),
     ("now use", rf"\bnow\s+(?:use|using|we use|we're using)\s+{_EGAP}{{old}}"),
     ("superseded by", rf"\bsuperseded by\s+{_EGAP}{{old}}"),
@@ -201,7 +203,7 @@ def _name_pat(slug: str, title: str) -> str:
 def _reversed(name: str, text: str, old_pat: str, new_pat: str) -> bool:
     """Does construction `name`, in this quote, put the wrong memory in its marked slot?"""
     for n, pat in _REVERSED:
-        # str.replace, not str.format: the patterns carry `{0,12}` quantifiers.
+        # str.replace, not str.format: the name patterns carry regex braces.
         pat = pat.replace("{old}", old_pat).replace("{new}", new_pat)
         if n == name and re.search(pat, text):
             return True

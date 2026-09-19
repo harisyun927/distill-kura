@@ -639,6 +639,23 @@ def test_a_filler_before_the_reversed_slot_does_not_restore_the_proof():
         r = rel(backwards)
         assert r is None or r["kind"] != "superseded", backwards
 
+    # (review, round 9) No length cap on the filler: a cap is a number a longer
+    # modifier walks past, and past it the forward pattern still matched while the
+    # reversed one did not. These are longer than the 40 / 12 / 60 characters the
+    # first version allowed.
+    long_en = "the astonishingly extremely carefully maintained and thoroughly documented legacy"
+    long_ja = "の長らく現場で使われてきた実績のある安定した方"
+    for backwards in (f"new-way is available; switch to {long_en} old-way",
+                      f"replace {long_en} new-way with old-way",
+                      f"replace new-way with {long_en} old-way",
+                      f"instead of {long_en} new-way, use old-way",
+                      f"we now use {long_en} old-way",
+                      f"new-way は old-way {long_ja}に統合する。",
+                      f"new-way は old-way {long_ja}に置き換える。",
+                      f"今後は old-way {long_ja}で行く。new-way はやめる"):
+        r = rel(backwards)
+        assert r is None or r["kind"] != "superseded", backwards
+
     # A filler the other way round still proves old → new — the loose slot does not
     # match the RIGHT name in the wrong place.
     for forwards in ("replace the old-way with the new-way",
