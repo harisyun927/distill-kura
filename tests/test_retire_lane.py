@@ -630,6 +630,19 @@ def test_a_study_slug_may_stand_in_either_slot_and_is_not_its_basename():
     out = proven(user("_study/design.v3 はやめて、new-way に統合する。"), titles3)
     assert pairs(out) == []
 
+    # (review, A′ round 3) Two names that fold to one normalised spelling (`Old` /
+    # `old`, or an NFKC pair like `ｎｅｗ` / `new`) are ambiguous in a slot: refuse,
+    # never resolve to whichever came last.
+    from distill_kura.distill.transition import parse_instruction
+    assert parse_instruction("Old はやめて、new-way に統合する。",
+                             ["Old", "old", "new-way"]) is None
+    assert parse_instruction("old-way はやめて、new に統合する。",
+                             ["old-way", "new", "ｎｅｗ"]) is None
+    assert parse_instruction("Old はやめて、new-way に統合する。",
+                             ["Old", "new-way"]) == ("Old", "new-way", None)
+    titles4 = {**TITLES, "Old": "Old", "old": "old"}
+    assert pairs(proven(user("Old はやめて、new-way に統合する。"), titles4)) == []
+
     # `_study/brain` names nothing called `brain`: no pair, and not counted as a name.
     titles2 = {**titles, "_study/brain": "Brain note"}
     out = proven(user("_study/brain はやめて、new-way に統合する。"), titles2)

@@ -101,8 +101,17 @@ def parse_instruction(line: str, names: "list[str] | tuple[str, ...]"
     m = template(names).match(_norm(line))
     if not m:
         return None
-    back = {_norm(n).strip(): n for n in names}
-    old, new = back[m.group("old")], back[m.group("new")]
+    # Two of the caller's names may fold to the same normalised spelling (`Old` and
+    # `old`, or an NFKC pair). A slot that matched such a spelling names BOTH — which
+    # is to say it names neither exactly — and is refused rather than resolved to
+    # whichever happened to come last. Exact names only.
+    back: dict[str, set[str]] = {}
+    for n in names:
+        back.setdefault(_norm(n).strip(), set()).add(n)
+    olds, news = back[m.group("old")], back[m.group("new")]
+    if len(olds) != 1 or len(news) != 1:
+        return None
+    (old,), (new,) = olds, news
     if old == new:
         return None
     return old, new, m.group("reason")
