@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from typing import Iterable
 
 # ── the one closed template — the ONLY thing that proves `old` → `new` ──────────────
 #
@@ -176,8 +177,16 @@ def _matched(text: str, table) -> list[str]:
     return [name for name, pat in table if re.search(pat, text)]
 
 
-def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
+def find_transition(evidence: list[dict], old: dict, new: dict,
+                    known: "Iterable[str] | None" = None) -> dict | None:
     """Did ONE [USER] quote prove `old` → `new`?
+
+    `known` is every slug the store holds (its `slug_set()`); the (old, new) pair is
+    added to it. It is what lets `parse_instruction` see a THIRD name that folds to
+    the same normalised spelling as `old` or `new` (`Old` beside `old`) and refuse
+    the slot as ambiguous. With only the pair in hand that collision is invisible, so
+    a caller that has a store must pass it — the lane, the pour path and
+    `Store.retire` all do.
 
     → `{"kind": "superseded", ...}` when some physical line of a [USER] quote is an
       exact whole-line match of the closed template naming exactly this (old, new)
@@ -198,6 +207,7 @@ def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
     old_norm, new_norm = _norm(old_slug).strip(), _norm(new_slug).strip()
     if not old_norm or not new_norm or old_norm == new_norm:
         return None
+    names = tuple({str(n) for n in (known or ()) if str(n)} | {old_slug, new_slug})
     retired_only = None
     for q in (evidence or []):
         if not isinstance(q, dict) or q.get("class") != "USER":
@@ -208,7 +218,7 @@ def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
         # (superseded) — each physical line stands on its own; a template spanning
         # a newline, or sharing a line with other prose, is not a whole-line match.
         for line in whole.splitlines():
-            hit = parse_instruction(line, (old_slug, new_slug))
+            hit = parse_instruction(line, names)
             if hit is not None and (hit[0], hit[1]) == (old_slug, new_slug):
                 return {"kind": "superseded", "old": old_slug, "new": new_slug,
                         "quote": str(q.get("text") or ""),

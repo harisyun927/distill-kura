@@ -781,7 +781,8 @@ class Store:
         titles = {sl: t for t, sl in self.titles().items()}
         r = find_transition(man.get("quotes") or [],
                             {"slug": old, "title": titles.get(old, "")},
-                            {"slug": new, "title": titles.get(new, "")})
+                            {"slug": new, "title": titles.get(new, "")},
+                            known=self.slug_set())
         return r if r and r.get("kind") == "superseded" else None
 
     def retire(self, old_slug: str, new_slug: str, manifest_hex: str) -> dict:

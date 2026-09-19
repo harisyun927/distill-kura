@@ -181,7 +181,8 @@ def _accept(line: str, old: str, new: str, candidates: dict[str, str]) -> dict:
     """
     r = find_transition([{"class": "USER", "text": line}],
                         {"slug": old, "title": candidates.get(old, "")},
-                        {"slug": new, "title": candidates.get(new, "")})
+                        {"slug": new, "title": candidates.get(new, "")},
+                        known=candidates)
     kind = r.get("kind") if r else None
     if kind not in (None, "superseded"):
         return {"skipped": "construction matched but the independent check disagreed",

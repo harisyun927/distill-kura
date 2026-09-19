@@ -1103,7 +1103,7 @@ class Distiller:
                         if sl != new_slug), reverse=True)
         for _, sl in cands:
             r = transition.find_transition(quotes, {"slug": sl, "title": titles.get(sl, "")},
-                                           new)
+                                           new, known=self.store.slug_set())
             if r and r["kind"] == "superseded":
                 return r
         return None

@@ -111,6 +111,23 @@ def test_swapped_slugs_prove_only_the_reverse():
     assert reverse is None or reverse["kind"] != "superseded"
 
 
+def test_a_store_slug_that_folds_to_the_same_spelling_makes_the_slot_ambiguous():
+    # The pour path and `Store.retire` hand `find_transition` only the (old, new)
+    # pair; the store may still hold `Old` beside `old`. With the store's slugs
+    # passed as `known`, the slot names both — i.e. neither exactly — and is refused
+    # for either spelling. Without a collision the same call still proves.
+    text = "Old はやめて、new-way に統合する。"
+    for old in ("old", "Old"):
+        r = find_transition([{"class": "USER", "text": text}],
+                            {"slug": old, "title": ""}, {"slug": "new-way", "title": ""},
+                            known={"Old", "old", "new-way", "third"})
+        assert r is None or r["kind"] != "superseded"
+    r = find_transition([{"class": "USER", "text": text}],
+                        {"slug": "Old", "title": ""}, {"slug": "new-way", "title": ""},
+                        known={"Old", "new-way", "third"})
+    assert r and r["kind"] == "superseded" and r["old"] == "Old"
+
+
 def test_a_title_in_place_of_a_slug_does_not_prove():
     r = _t("the old way はやめて、new-way に統合する。")
     assert r is None or r["kind"] != "superseded"
