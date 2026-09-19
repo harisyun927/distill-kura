@@ -350,3 +350,64 @@ def test_a_line_broken_by_a_newline_is_skipped_not_silently_lost():
     out = proven(user("old-way は退役して、\nnew-way に置き換える。"), TITLES)
     assert pairs(out) == []
     assert "direction not established by the construction" in why(out)
+
+
+# ── round 5 (the confirmation review's two P1s) ─────────────────────────────
+
+
+def test_a_negated_integration_or_retirement_proves_nothing():
+    """(review) With the inflection optional, the bare prefix `に統合` matched inside
+    `に統合しない` and `退役` inside `退役しない`, so a human's explicit REFUSAL of a
+    transition came back `superseded` — and both the pour path and `Store.retire`
+    trust that relation. The inflection is now required and must be the positive one."""
+    from distill_kura.distill.transition import find_transition
+
+    old = {"slug": "old-way", "title": TITLES["old-way"]}
+    new = {"slug": "new-way", "title": TITLES["new-way"]}
+
+    def rel(text):
+        return find_transition([{"class": "USER", "text": text}], old, new)
+
+    for refusal in ("old-way は new-way に統合しない。",
+                    "old-way は new-way に統合しません。",
+                    "old-way は new-way に統合するな。",
+                    "old-way は退役しない。new-way は別物。",
+                    "old-way は退役してはいけない。new-way は別物。"):
+        r = rel(refusal)
+        assert r is None or r["kind"] != "superseded", refusal
+
+    # The positive forms still prove what they did before.
+    r = rel("old-way は退役して、new-way に統合する。")
+    assert r is not None and r["kind"] == "superseded"
+
+
+def test_the_real_watermark_is_not_merged_through_a_substituted_store(tmp_path):
+    """(review) The manifest check refuses the evidence write on a swapped store, but
+    the end-of-pass merge still built `Watermarks` at the cached `dis.still` — whose
+    constructor makes `_still` and whose `advance` writes `retire-watermark.json`
+    through the substitution — even when the pass faced nothing. Drive a hit-less,
+    non-dry pass against a store that reports substitution and confirm nothing under
+    `_still` comes into being and the pass says why."""
+    still = tmp_path / "_still"
+
+    class Substituted:
+        name = "stub"
+        path = str(tmp_path)
+        write_policy = "append"
+
+        def _substitution_refusal(self):
+            return {"ok": False, "error": "no longer resolves"}
+
+        def titles(self):
+            return {}
+
+        def slug_set(self):
+            return set()
+
+    dis = SimpleNamespace(store=Substituted(), still=str(still), chunk_chars=4000,
+                          marks=SimpleNamespace(read=lambda: {}),
+                          files=lambda session=None: [])
+    r = run_lane(dis)
+    assert r["ok"] is False and "no longer resolves" in r["error"]
+    assert r["faced"] == [] and r["refused"] == []
+    assert not still.exists()

@@ -53,7 +53,10 @@ _REPLACEMENT = [
     # decided, so the receipt has to recognise the same vocabulary the template does —
     # otherwise every retirement using these forms would come back `kind: None` (an
     # expected gap, not a disagreement) instead of confirming what the template found.
-    ("に統合", r"に統合(?:する|した|します)?"),
+    # The inflection is REQUIRED and must be the positive one: with it optional, the
+    # bare prefix `に統合` matched inside `に統合しない` and a human's explicit refusal
+    # read as succession. `しない` / `しません` / `するな` all fail to match now.
+    ("に統合", r"に統合(?:する|した|します)(?!な)"),
 ]
 
 # Retirement without a successor: proves the old thing is over, nothing more.
@@ -64,8 +67,10 @@ _RETIREMENT = [
     ("drop", r"\bdrop(?:ped|ping|s)?\b"),
     ("retire", r"\bretir(?:e|ed|es|ing)\b"),
     ("done with", r"\bdone with\b"),
-    # See the comment on "に統合" above: this is the template's other fixed verb slot.
-    ("退役", r"退役(?:して|した|する|します)?"),
+    # See the comment on "に統合" above: this is the template's other fixed verb slot,
+    # and it has the same rule — a full positive inflection, never the bare prefix
+    # (`退役しない` / `退役してはいけない` are not retirements).
+    ("退役", r"退役(?:して|した|する|します)(?![なは])"),
 ]
 
 # A clause that changes the subject can never supply the successor.

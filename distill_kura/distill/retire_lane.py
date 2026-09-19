@@ -269,6 +269,8 @@ def _write_manifest(store, quote: str, source: str, key: str,
     store without any error along the way. Checking here, before the first byte, is the
     only place that can refuse before that write happens; `Store.retire`'s copy of the
     same check is defence for the direct `retire` CLI path, not redundant with this one.
+    The pass's other write — the real watermark merge at the end of `run_lane` — asks
+    the same question itself, since a pass that faced nothing never gets here.
 
     One USER quote, verbatim, and where it was read from. `Store.retire` re-runs its
     relation against this file, so nothing here is trusted on the strength of having
@@ -393,7 +395,18 @@ def run_lane(dis, session: str | None = None, *, dry_run: bool = False,
         # Only a pass that actually wrote gets to move the real marks, and it moves them
         # forward only (`advance` takes a max), so a narrower `--session` run can never
         # pull a wider one backwards.
+        #
+        # This is the pass's second write door, and it is asked the same question as
+        # the first: `real` was joined from the path the store was opened on, so if
+        # the directory has since been swapped for a symlink, `Watermarks(real)` would
+        # mkdir `_still` and then `advance` would write `retire-watermark.json` through
+        # the substitution — even on a pass that faced nothing. `_write_manifest`'s
+        # check does not cover this write, and cannot: a pass with no hits never
+        # reaches it.
         if not dry_run:
+            if (r := store._substitution_refusal()) is not None:
+                return {"ok": False, "error": r["error"], "segments": read,
+                        "faced": faced, "refused": refused, "skipped": skipped}
             done = Watermarks(real)
             for k, pos in lane.read().items():
                 done.advance(k, pos)
