@@ -13,13 +13,17 @@ structure for a machine to recover "this sentence authorises a write" from word 
 and position alone, no matter how many patches are layered on the reading.
 
 So this module (2026-09-19, round "A′") stops reading free text for authorisation.
-`superseded` may only come from an EXACT, whole-line match of one closed template —
-the same template `distill_kura/distill/retire_lane.py` already carries, now defined
-here once and imported by that lane so there is a single spec, not two copies drifting
-apart:
+`superseded` may only come from an EXACT, whole-line match of one of two closed
+templates — the Japanese template `distill_kura/distill/retire_lane.py` already
+carries, now defined here once and imported by that lane so there is a single spec,
+not two copies drifting apart, and one English template (PR-A, 2026-09-19) added
+alongside it under the same rule (exact whole-line match, exact slugs, no reason
+clause):
 
     <old-slug> は [one reason sentence naming no candidate slug、ending in
     役目終わり。](optional) (退役して|やめて)、<new-slug> (に置き換える|に統合する)[。]
+
+    retire <old-slug>, replaced by <new-slug>.[trailing period optional, no reason clause]
 
 Conversation language ≠ authorisation language. Everything that is not this template —
 however plausible, however explicit it reads to a person — proves nothing here. A
@@ -89,19 +93,114 @@ def template(names: "list[str] | tuple[str, ...]") -> re.Pattern:
     )
 
 
+_EN_WS = r" +"
+
+
+def template_en(names: "list[str] | tuple[str, ...]") -> re.Pattern:
+    """The one closed ENGLISH template (PR-A, 2026-09-19), matched the same way as
+    `template`: whole line, exact slugs from `names` only, longest names first so a
+    slot cannot be fooled by a shorter name sitting inside a longer one.
+
+    `retire <old-slug>, replaced by <new-slug>.` — no reason clause (the Japanese
+    template's 役目終わり slot has no English counterpart here), no articles, no other
+    verb. Anything else — `retire the old, replaced by new.`, `superseded by`, a
+    trailing clause after the final slug — is not this template and proves nothing.
+    """
+    alts = sorted({_norm(n).strip() for n in names if _norm(n).strip()},
+                  key=len, reverse=True)
+    alt = "|".join(re.escape(a) for a in alts) or "(?!)"
+    return re.compile(
+        rf"^retire{_EN_WS}(?P<old>{alt}), *replaced{_EN_WS}by{_EN_WS}(?P<new>{alt})"
+        rf"\.?$"
+    )
+
+
+_TEMPLATES = (
+    (template, "閉じた型: 退役して/に置き換える"),
+    (template_en, "閉じた型: retire/replaced by"),
+)
+
+# ── decomposition, not the full names×names product ─────────────────────────────────
+#
+# A store's `slugs()` accepts any Markdown basename, so nothing stops it holding
+# `a`, `a, replaced by b`, `b, replaced by c` and `c` side by side. Against that store,
+# `retire a, replaced by b, replaced by c.` reads TWO ways under the closed English
+# template — (old=a, new="b, replaced by c") and (old="a, replaced by b", new=c) — and
+# the old "try the alternation, take whichever it lands on" reading picked the longest
+# name silently. A line whose decomposition is not unique proves nothing; it is refused
+# exactly like a line that matches no template at all.
+#
+# Enumerating every (old, new) pair from `names` (hundreds, in the lane) would be the
+# full product. Instead: `old` can only be a name the line could START with (right
+# after `retire ` for the English template, at the line's own head for the Japanese
+# one); `new` can only be a name the line could END with (right before the trailing
+# `.`/`。`, past `replaced by` / `に置き換える|に統合する`). Only the pairs that survive
+# both filters are confirmed by building the REAL two-name template and matching the
+# whole line — small counts on both sides of the product, not `len(names)**2`.
+_JP_OLD_START_FMT = r"^{name}"
+_JP_NEW_END_FMT = r"{name}" + _WS + r"(?:に置き換える|に統合する)。?$"
+_EN_OLD_START_FMT = r"^retire" + _EN_WS + r"{name}"
+_EN_NEW_END_FMT = r", *replaced" + _EN_WS + r"by" + _EN_WS + r"{name}\.?$"
+
+
+def _decompositions(normed: str, names: "Iterable[str]", build,
+                    old_start_fmt: str, new_end_fmt: str
+                    ) -> set[tuple[str, str]]:
+    """Every NORMALISED (old, new) pair whose own two-name template — `build([old,
+    new])`, not the full-`names` one — matches `normed` in full, for one closed
+    template. See the module note above for why this is a filtered pair search, not
+    the `names` × `names` product.
+    """
+    old_ok: set[str] = set()
+    new_ok: set[str] = set()
+    for n in names:
+        nn = _norm(n).strip()
+        if not nn:
+            continue
+        if re.match(old_start_fmt.format(name=re.escape(nn)), normed):
+            old_ok.add(nn)
+        if re.search(new_end_fmt.format(name=re.escape(nn)), normed):
+            new_ok.add(nn)
+    found: set[tuple[str, str]] = set()
+    for on in old_ok:
+        for nn in new_ok:
+            if on == nn:
+                continue
+            m = build([on, nn]).match(normed)
+            if m and m.group("old") == on and m.group("new") == nn:
+                found.add((on, nn))
+    return found
+
+
 def parse_instruction(line: str, names: "list[str] | tuple[str, ...]"
                       ) -> tuple[str, str, str | None] | None:
-    """The (old, new, reason) ONE line proves under the closed template, with old and
-    new drawn from `names` (returned in the caller's own spelling), or None.
+    """The (old, new, reason) ONE line proves under one of the closed templates, with
+    old and new drawn from `names` (returned in the caller's own spelling), or None.
 
     `line` is NFKC-normalised and lower-cased here. The match is whole-line-anchored:
     a valid-looking fragment inside a longer line is not a ruling, and multiple
     template lines in one quote each stand on their own (call this once per physical
     line). A name "succeeding" itself is not an instruction.
+
+    A line may decompose into an (old, new) pair more than one way when the store
+    holds names built out of other names (`a`, `a, replaced by b`, `b, replaced by c`,
+    `c` — see `_decompositions`). A non-unique decomposition proves nothing: it is
+    refused exactly like no match at all, for both templates alike. The Japanese
+    template is preferred when both would otherwise apply (only it has a `reason`
+    slot); a line whose NORMALISED text matches both closed templates at once is
+    refused too — that should not be reachable given how different the two templates'
+    fixed literals are, but this function does not trust "should not happen" over its
+    own check.
     """
-    m = template(names).match(_norm(line))
-    if not m:
+    normed = _norm(line)
+    jp = _decompositions(normed, names, template, _JP_OLD_START_FMT, _JP_NEW_END_FMT)
+    en = _decompositions(normed, names, template_en, _EN_OLD_START_FMT, _EN_NEW_END_FMT)
+    if jp and en:
         return None
+    decomps, build = (jp, template) if jp else (en, template_en)
+    if len(decomps) != 1:
+        return None
+    ((old_norm, new_norm),) = decomps
     # Two of the caller's names may fold to the same normalised spelling (`Old` and
     # `old`, or an NFKC pair). A slot that matched such a spelling names BOTH — which
     # is to say it names neither exactly — and is refused rather than resolved to
@@ -109,13 +208,14 @@ def parse_instruction(line: str, names: "list[str] | tuple[str, ...]"
     back: dict[str, set[str]] = {}
     for n in names:
         back.setdefault(_norm(n).strip(), set()).add(n)
-    olds, news = back[m.group("old")], back[m.group("new")]
+    olds, news = back.get(old_norm, set()), back.get(new_norm, set())
     if len(olds) != 1 or len(news) != 1:
         return None
     (old,), (new,) = olds, news
     if old == new:
         return None
-    return old, new, m.group("reason")
+    m = build((old_norm, new_norm)).match(normed)
+    return old, new, (m.groupdict().get("reason") if m else None)
 
 
 # ── retired-only: reference information, never proof of a successor ─────────────────
@@ -220,9 +320,12 @@ def find_transition(evidence: list[dict], old: dict, new: dict,
         for line in whole.splitlines():
             hit = parse_instruction(line, names)
             if hit is not None and (hit[0], hit[1]) == (old_slug, new_slug):
+                label = next((lbl for build, lbl in _TEMPLATES
+                             if build(names).match(line)),
+                            _TEMPLATES[0][1])
                 return {"kind": "superseded", "old": old_slug, "new": new_slug,
                         "quote": str(q.get("text") or ""),
-                        "constructions": ["閉じた型: 退役して/に置き換える"]}
+                        "constructions": [label]}
         # (retired-only) — informational only; a "ところで" clause is cut first so an
         # unrelated later sentence can never be mistaken for context.
         text = _clauses(whole)

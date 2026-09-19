@@ -16,7 +16,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from distill_kura.distill.transition import find_transition       # noqa: E402
+from distill_kura.distill.transition import (                     # noqa: E402
+    find_transition, parse_instruction,
+)
 
 
 def _t(text, old=("old-way", "the old way"), new=("new-way", "the new way"), topic=""):
@@ -138,6 +140,65 @@ def test_the_template_embedded_in_a_longer_line_does_not_prove():
     assert r is None or r["kind"] != "superseded"
 
 
+# ── the closed ENGLISH template (PR-A, 2026-09-19) ──────────────────────────────────
+
+@pytest.mark.parametrize("text", [
+    "retire old-way, replaced by new-way.",
+    "retire old-way, replaced by new-way",          # trailing . optional
+    "Retire Old-Way, Replaced By New-Way.",          # _norm folds case before matching
+])
+def test_the_closed_english_template_proves_succession(text):
+    r = _t(text)
+    assert r and r["kind"] == "superseded" and r["old"] == "old-way" \
+        and r["new"] == "new-way", text
+
+
+def test_the_closed_english_template_does_not_prove_the_reverse():
+    text = "retire old-way, replaced by new-way."
+    forward = _t(text)
+    assert forward and forward["kind"] == "superseded"
+    reverse = find_transition([{"class": "USER", "text": text}],
+                              {"slug": "new-way", "title": "the new way"},
+                              {"slug": "old-way", "title": "the old way"})
+    assert reverse is None or reverse["kind"] != "superseded"
+
+
+@pytest.mark.parametrize("text", [
+    "retire the old-way, replaced by new-way.",
+    "old-way is retired, replaced by new-way.",
+    "retire old-way, replaced by new-way and third.",
+    "retire old-way replaced by new-way.",
+    "retire old-way, not replaced by new-way.",
+    "please retire old-way, replaced by new-way.",
+    "retire old-way, replaced by new-way. thanks",
+    "retire old-way, superseded by new-way.",
+])
+def test_english_free_text_and_variants_never_prove_succession(text):
+    r = _t(text)
+    assert r is None or r["kind"] != "superseded", text
+
+
+def test_an_english_name_collision_makes_the_slot_ambiguous():
+    text = "retire Old, replaced by new-way."
+    r = find_transition([{"class": "USER", "text": text}],
+                        {"slug": "Old", "title": ""}, {"slug": "new-way", "title": ""},
+                        known={"Old", "old", "new-way"})
+    assert r is None or r["kind"] != "superseded"
+
+
+def test_two_lines_each_prove_their_own_pair_japanese_and_english():
+    quote = ("old-way はやめて、new-way に統合する。\n"
+             "retire third-thing, replaced by fourth-thing.")
+    r1 = find_transition([{"class": "USER", "text": quote}],
+                         {"slug": "old-way", "title": "the old way"},
+                         {"slug": "new-way", "title": "the new way"})
+    assert r1 and r1["kind"] == "superseded" and r1["new"] == "new-way"
+    r2 = find_transition([{"class": "USER", "text": quote}],
+                         {"slug": "third-thing", "title": "Third thing"},
+                         {"slug": "fourth-thing", "title": "Fourth thing"})
+    assert r2 and r2["kind"] == "superseded" and r2["new"] == "fourth-thing"
+
+
 def test_two_lines_each_prove_their_own_pair():
     quote = ("old-way はやめて、new-way に統合する。\n"
              "third-thing は退役して、fourth-thing に置き換える。")
@@ -149,3 +210,41 @@ def test_two_lines_each_prove_their_own_pair():
                          {"slug": "third-thing", "title": "Third thing"},
                          {"slug": "fourth-thing", "title": "Fourth thing"})
     assert r2 and r2["kind"] == "superseded" and r2["new"] == "fourth-thing"
+
+
+# ── a decomposition that is not unique proves nothing (Codex P2, transition.py:114) ─
+# When the store's OWN slugs are built out of other slugs, the closed English
+# template's alternation can read one line two ways: `retire a, replaced by b,
+# replaced by c.` is both (old=a, new="b, replaced by c") and
+# (old="a, replaced by b", new=c). Neither reading may win silently.
+
+def test_an_ambiguous_english_decomposition_proves_neither_reading():
+    names = {"a", "a, replaced by b", "b, replaced by c", "c"}
+    line = "retire a, replaced by b, replaced by c."
+    assert parse_instruction(line, names) is None
+    r = find_transition([{"class": "USER", "text": line}],
+                        {"slug": "a", "title": ""},
+                        {"slug": "b, replaced by c", "title": ""}, known=names)
+    assert r is None or r["kind"] != "superseded"
+
+
+def test_the_same_line_proves_when_the_decomposition_is_unique():
+    names = {"a", "b, replaced by c"}
+    line = "retire a, replaced by b, replaced by c."
+    assert parse_instruction(line, names) == ("a", "b, replaced by c", None)
+
+
+def test_an_ambiguous_japanese_decomposition_proves_neither_reading():
+    names = {"x", "x はやめて、y", "y", "z", "y はやめて、z"}
+    line = "x はやめて、y はやめて、z に統合する。"
+    assert parse_instruction(line, names) is None
+    r = find_transition([{"class": "USER", "text": line}],
+                        {"slug": "x", "title": ""},
+                        {"slug": "y はやめて、z", "title": ""}, known=names)
+    assert r is None or r["kind"] != "superseded"
+
+
+def test_the_same_japanese_line_proves_when_the_decomposition_is_unique():
+    names = {"x", "y はやめて、z"}
+    line = "x はやめて、y はやめて、z に統合する。"
+    assert parse_instruction(line, names) == ("x", "y はやめて、z", None)
