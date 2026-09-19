@@ -397,15 +397,12 @@ round found; the holes were in the METHOD, not any one implementation. Round A�
 (2026-09-19) stopped reading free text for authorisation. `distill/transition.py`
 `find_transition(evidence, old, new)` is the whole relation, pure and model-free, and it
 now proves `superseded` from exactly ONE thing: some physical line of a [USER] quote is
-an exact whole-line match of one of the two closed templates `distill/retire_lane.py`
-already carries (`template` / `template_en` / `parse_instruction`, defined once in
-`transition.py` and shared by both):
+an exact whole-line match of the closed template `distill/retire_lane.py` already
+carries (`template` / `parse_instruction`, defined once in `transition.py` and shared by
+both):
 
     <old-slug> は [one reason sentence naming no candidate slug、ending in 役目終わり。]
     (退役して|やめて)、<new-slug> (に置き換える|に統合する)[。]
-
-    retire <old-slug>, replaced by <new-slug>.[trailing period optional, no reason
-    clause] (PR-A, 2026-09-19)
 
 Conversation language ≠ authorisation language: an arrow, "instead of", a paraphrase, a
 title instead of a slug — none of it proves a direction any more, however plausible it

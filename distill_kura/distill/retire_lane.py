@@ -34,13 +34,11 @@ patching the reading (a slot table, a span-scoping rule, a two-sentence fallback
 that gap for good — round 3's fix was exactly such a patch, and round 4 found new holes
 in it.
 
-So round 4 does not patch the reading again. It removes it. The lane now carries closed
-templates only, each matched against the WHOLE line (`re.fullmatch`, in effect):
+So round 4 does not patch the reading again. It removes it. The lane now carries exactly
+ONE closed template, matched against the WHOLE line (`re.fullmatch`, in effect):
 
     <old-slug> は [one sentence naming no candidate slug。] (退役して|やめて)、
     <new-slug> (に置き換える|に統合する)[。]
-
-    retire <old-slug>, replaced by <new-slug>.[trailing period optional] (PR-A, 2026-09-19)
 
 `<old-slug>` and `<new-slug>` are read only as the store's own slugs — never as titles,
 never as a slug sitting inside a longer one — and direction is not inferred from
@@ -97,13 +95,11 @@ MAX_NAMES = 8
 
 LANE_KIND = "retirement-lane"
 
-# The verbs either closed template's front slot carries (Japanese and, since PR-A
-# 2026-09-19, the English `retire …, replaced by …` form). A line that uses one of
-# these AND names a candidate — by slug or by title — but still fails the closed
-# template is not ordinary talk: it is an attempted retirement the template could not
-# parse, and it must say so out loud rather than let the watermark pass over it in
-# silence.
-_VERB = re.compile(r"退役して|やめて|\bretire\b")
+# The two verbs the template's front slot carries. A line that uses one of these AND
+# names a candidate — by slug or by title — but still fails the closed template is not
+# ordinary talk: it is an attempted retirement the template could not parse, and it must
+# say so out loud rather than let the watermark pass over it in silence.
+_VERB = re.compile(r"退役して|やめて")
 
 
 def _names_slug(text: str, slug: str) -> bool:
