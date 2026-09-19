@@ -590,3 +590,36 @@ def test_the_closed_template_itself_is_still_directional():
 
     backward = rel("new-way はやめて、old-way に統合する。")
     assert backward is None or backward["kind"] != "superseded"
+
+
+def test_a_study_slug_may_stand_in_either_slot_and_is_not_its_basename():
+    """(review, A′) A store's long-form notes are slugs of the form `_study/name`
+    (store.py). The template's slug token refused the `/`, so such a memory could
+    never be retired nor serve as successor — a permanent, silent skip as the
+    watermark walked past. And `/` is a name boundary: `_study/brain` is not
+    `brain`."""
+    from distill_kura.distill.transition import find_transition
+
+    titles = {**TITLES, "_study/old-note": "Old note", "_study/new-note": "New note",
+              "brain": "Brain"}
+
+    out = proven(user("_study/old-note はやめて、new-way に統合する。"), titles)
+    assert pairs(out) == [("_study/old-note", "new-way")]
+    out = proven(user("old-way は PR2 完了で役目終わり。退役して、_study/new-note に置き換える。"),
+                 titles)
+    assert pairs(out) == [("old-way", "_study/new-note")]
+
+    # The same line proves the same pair through the store's own relation.
+    r = find_transition([{"class": "USER", "text": "_study/old-note はやめて、new-way に統合する。"}],
+                        {"slug": "_study/old-note", "title": "Old note"},
+                        {"slug": "new-way", "title": "The new way"})
+    assert r is not None and r["kind"] == "superseded"
+
+    # `_study/brain` names nothing called `brain`: no pair, and not counted as a name.
+    titles2 = {**titles, "_study/brain": "Brain note"}
+    out = proven(user("_study/brain はやめて、new-way に統合する。"), titles2)
+    assert pairs(out) == [("_study/brain", "new-way")]
+    r = find_transition([{"class": "USER", "text": "_study/brain はやめて、new-way に統合する。"}],
+                        {"slug": "brain", "title": "Brain"},
+                        {"slug": "new-way", "title": "The new way"})
+    assert r is None

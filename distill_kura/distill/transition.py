@@ -54,7 +54,9 @@ import unicodedata
 # clause names some THIRD candidate, is candidate-set logic that belongs to the
 # caller (`retire_lane.py`'s `_match_template`), not to this pure relation.
 _WS = r" *"
-_SLUG = r"[0-9a-z_\-]+"
+# A store's slugs are `name` or `_study/name` (long-form notes, see store.py) — the
+# `/` is part of the name, and both shapes may stand in either slot.
+_SLUG = r"(?:_study/)?[0-9a-z_\-]+"
 # The middle sentence carries a reason and NOTHING else: no subject/topic/object marker
 # and no comma, so a clause naming a THIRD thing (in a different voice) cannot slip
 # through as "just the reason". It must end in the one fixed phrase 役目終わり, right
@@ -136,12 +138,14 @@ def _clauses(text: str) -> str:
 
 def _names(text: str, *candidates: str) -> str | None:
     """The first candidate that appears in `text` as a whole name (already NFKC-low)."""
-    _ASCII = re.compile(r"^[0-9A-Za-z_\-]+$")
+    # `/` is a slug character too (`_study/name`), so it is part of the boundary:
+    # `_study/brain` must not read as naming `brain`.
+    _ASCII = re.compile(r"^[0-9A-Za-z_\-/]+$")
     for c in candidates:
         c = _norm(c).strip()
         if not c:
             continue
-        pat = (rf"(?<![0-9A-Za-z_\-]){re.escape(c)}(?![0-9A-Za-z_\-])"
+        pat = (rf"(?<![0-9A-Za-z_\-/]){re.escape(c)}(?![0-9A-Za-z_\-/])"
                if _ASCII.match(c) else re.escape(c))
         if re.search(pat, text):
             return c

@@ -108,7 +108,8 @@ def _names_slug(text: str, slug: str) -> bool:
     A slug sitting inside a longer slug is not a name (`new-way` inside `new-way-v2`),
     so the check needs the same word-boundary the store itself enforces on slugs.
     """
-    pat = rf"(?<![0-9a-z_\-]){re.escape(slug.lower())}(?![0-9a-z_\-])"
+    # `/` is a slug character too (`_study/name`): `_study/brain` is not `brain`.
+    pat = rf"(?<![0-9a-z_\-/]){re.escape(slug.lower())}(?![0-9a-z_\-/])"
     return re.search(pat, text) is not None
 
 
