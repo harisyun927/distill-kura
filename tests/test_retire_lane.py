@@ -553,3 +553,56 @@ inherit_global_journals = false
     before = tree()
     assert cli.main(["-c", str(cfg), "-s", "w", "retire-lane", "--dry-run"]) == 0
     assert tree() == before
+
+
+# ── round 7 (the third confirmation review) ─────────────────────────────────
+
+
+def test_a_construction_with_the_wrong_memory_in_its_marked_slot_proves_nothing():
+    """(review) `new-way は old-way に統合する。` carried `に統合` and both names, and
+    that was enough for old → new — the sentence says the reverse. Most constructions
+    mark one slot (`X に統合` — X is the destination; `replace X with Y` — X goes),
+    and a construction whose marked slot holds the wrong memory no longer counts. For
+    the whole table, not just `に統合`, so the same hole cannot return one verb at a
+    time."""
+    from distill_kura.distill.transition import find_transition
+
+    old = {"slug": "old-way", "title": TITLES["old-way"]}
+    new = {"slug": "new-way", "title": TITLES["new-way"]}
+
+    def rel(text):
+        return find_transition([{"class": "USER", "text": text}], old, new)
+
+    for backwards in ("new-way は old-way に統合する。",
+                      "new-way は old-way に置き換える。",
+                      "new-way は old-way に変更する。",
+                      "new-way に代えて old-way を使う",
+                      "new-way の代わりに old-way を使う",
+                      "今後は old-way で行く。new-way はやめる",
+                      "new-way はやめて、old-way で行く",
+                      "new-way → old-way",
+                      "new-way から old-way へ移す",
+                      "replace new-way with old-way",
+                      "switch to old-way, new-way is retired",
+                      "stop using new-way, now use old-way",
+                      "old-way instead of new-way",
+                      "new-way is superseded by old-way",
+                      "The new way は The old way に統合する。"):
+        r = rel(backwards)
+        assert r is None or r["kind"] != "superseded", backwards
+
+    # The same constructions the right way round still prove old → new.
+    for forwards in ("old-way は new-way に統合する。",
+                     "old-way は new-way に置き換える。",
+                     "old-way に代えて new-way を使う",
+                     "old-way → new-way",
+                     "replace old-way with new-way",
+                     "new-way instead of old-way",
+                     "The old way は The new way に統合する。"):
+        r = rel(forwards)
+        assert r is not None and r["kind"] == "superseded", forwards
+
+    # And the lane's own receipt agrees with its template rather than being
+    # contradicted by it.
+    assert pairs(proven(user("old-way は退役して、new-way に統合する。"), TITLES)) \
+        == [("old-way", "new-way")]

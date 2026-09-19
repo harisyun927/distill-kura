@@ -84,6 +84,31 @@ _RETIREMENT = [
     ("退役", rf"退役(?:して|した|する|します){_END}"),
 ]
 
+# ── a construction read backwards ───────────────────────────────────────────
+# Most constructions mark ONE of the two slots: `X に統合する` says X is the
+# destination, `replace X with Y` says X is what goes. Finding the marker somewhere
+# beside both names is not enough — `new-way は old-way に統合する` carries `に統合`
+# and both names and says the OPPOSITE of old → new. Each entry is (construction name,
+# pattern with `{old}` / `{new}` slots); a match means that construction, in this
+# quote, puts the wrong memory in its marked slot, and it no longer counts as proof.
+_REVERSED = [
+    ("やめて…で行く", r"{old}\s*(?:で|に)(?:行く|いく|する)"),
+    ("に代えて", r"{new}\s*に代えて"),
+    ("代わりに", r"{new}\s*の?代わりに"),
+    ("今後は", r"今後は\s*{old}"),
+    ("に変更", r"{old}\s*に(?:変更|変え)"),
+    ("に置き換え", r"{old}\s*に置(?:き)?換え"),
+    ("→", r"{new}\s*→\s*{old}"),
+    ("から…へ", r"{new}\s*から"),
+    ("instead of", r"\binstead of\s+{new}"),
+    ("instead", r"{old}\s+instead\b"),
+    ("replace … with", r"\breplac(?:e|ed|es|ing)\s+{new}\b"),
+    ("switch to", r"\bswitch(?:ed|es|ing)?\s+to\s+{old}"),
+    ("now use", r"\bnow\s+(?:use|using|we use|we're using)\s+{old}"),
+    ("superseded by", r"\bsuperseded by\s+{old}"),
+    ("に統合", r"{old}\s*に統合"),
+]
+
 # A clause that changes the subject can never supply the successor.
 _SHIFT = re.compile(r"(ところで|別件|余談|それはそうと|by the way|anyway|"
                     r"on another note|unrelated)", re.I)
@@ -151,6 +176,26 @@ def _matched(text: str, table) -> list[str]:
     return [name for name, pat in table if re.search(pat, text)]
 
 
+def _name_pat(slug: str, title: str) -> str:
+    """A pattern for one memory by either of its names (already NFKC-lowered), with the
+    same whole-name rule `_names` applies."""
+    alts = []
+    for c in (slug, title):
+        c = _norm(c).strip()
+        if c:
+            alts.append(rf"(?<![0-9A-Za-z_\-]){re.escape(c)}(?![0-9A-Za-z_\-])"
+                        if _ASCII.match(c) else re.escape(c))
+    return "(?:" + "|".join(alts) + ")"
+
+
+def _reversed(name: str, text: str, old_pat: str, new_pat: str) -> bool:
+    """Does construction `name`, in this quote, put the wrong memory in its marked slot?"""
+    for n, pat in _REVERSED:
+        if n == name and re.search(pat.format(old=old_pat, new=new_pat), text):
+            return True
+    return False
+
+
 def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
     """Did ONE [USER] quote prove `old` → `new`?
 
@@ -165,6 +210,7 @@ def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
     if not old_slug or not new_slug or old_slug == new_slug:
         return None
     new_words = _words(new_title, new_topic)
+    old_pat, new_pat = _name_pat(old_slug, old_title), _name_pat(new_slug, new_title)
     retired_only = None
     for q in (evidence or []):
         if not isinstance(q, dict) or q.get("class") != "USER":
@@ -175,7 +221,10 @@ def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
         text = _clauses(whole)             # a "ところで" clause is not the human's ruling
         if not _names(text, old_slug, old_title):
             continue
-        repl = _matched(text, _REPLACEMENT)
+        # A construction whose marked slot holds the WRONG memory (`new-way は
+        # old-way に統合する`) says the reverse and is not proof of old → new.
+        repl = [n for n in _matched(text, _REPLACEMENT)
+                if not _reversed(n, text, old_pat, new_pat)]
         retire = _matched(text, _RETIREMENT)
         if not (repl or retire):
             continue                       # (ii) — the sentence must SAY the change

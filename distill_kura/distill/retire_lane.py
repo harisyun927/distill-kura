@@ -175,9 +175,11 @@ def _match_template(line: str, candidates: dict[str, str]) -> tuple[str, str] | 
 
 
 def _accept(line: str, old: str, new: str, candidates: dict[str, str]) -> dict:
-    """The template has already decided the pair; this re-runs the same nondirectional
-    relation `Store.retire` re-runs on the manifest, as an independent receipt — never a
-    second vote on direction, since `find_transition` does not read direction at all.
+    """The template has already decided the pair; this re-runs the same relation
+    `Store.retire` re-runs on the manifest, as an independent receipt. It is not a
+    second vote on direction: `find_transition` reads no word order, only whether a
+    construction's MARKED slot (`X に統合する` — X is the destination) holds the wrong
+    memory, in which case that construction does not count.
 
     Its construction vocabulary now includes `退役` and `に統合` (added alongside this
     template so the two independent checks use the same words), but it still does not
