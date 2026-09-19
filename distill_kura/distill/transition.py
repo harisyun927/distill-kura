@@ -47,6 +47,13 @@ _REPLACEMENT = [
     ("switch to", r"\bswitch(?:ed|es|ing)?\s+to\b"),
     ("now use", r"\bnow\s+(?:use|using|we use|we're using)\b"),
     ("superseded by", r"\bsuperseded by\b"),
+    # Round 4's closed template in retire_lane.py carries these two as its own fixed
+    # verb slots (退役して / に統合する). `Store.retire` re-runs this table as an
+    # independent, nondirectional sanity receipt on whatever the template already
+    # decided, so the receipt has to recognise the same vocabulary the template does —
+    # otherwise every retirement using these forms would come back `kind: None` (an
+    # expected gap, not a disagreement) instead of confirming what the template found.
+    ("に統合", r"に統合(?:する|した|します)?"),
 ]
 
 # Retirement without a successor: proves the old thing is over, nothing more.
@@ -57,6 +64,8 @@ _RETIREMENT = [
     ("drop", r"\bdrop(?:ped|ping|s)?\b"),
     ("retire", r"\bretir(?:e|ed|es|ing)\b"),
     ("done with", r"\bdone with\b"),
+    # See the comment on "に統合" above: this is the template's other fixed verb slot.
+    ("退役", r"退役(?:して|した|する|します)?"),
 ]
 
 # A clause that changes the subject can never supply the successor.
