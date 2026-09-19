@@ -73,6 +73,7 @@ import json
 import os
 import re
 import shutil
+import fcntl
 import tempfile
 from datetime import datetime, timezone
 
@@ -356,7 +357,23 @@ def run_lane(dis, session: str | None = None, *, dry_run: bool = False,
     real = os.path.join(dis.still, "retire-watermark.json")
     scratch = tempfile.mkdtemp(prefix="kura-retire-lane-")
     faced, refused, skipped, read = [], [], [], 0
+    gate = None
     try:
+        if not dry_run:
+            # Two writing passes must not overlap: each walks a private COPY of the
+            # real marks, so `lane.claim()` reserves only against that copy and both
+            # would read — and retire, and write evidence for — the same stretch. The
+            # `max()` merge at the end stops a rewind, not a duplicate. One pass at a
+            # time, and the copy is taken only once the lock is held, so the second
+            # pass starts from where the first one merged to. Asked after the
+            # substitution check: the lock file lives under `dis.still`, and creating
+            # it is itself a write through whatever `still` now points at.
+            if (r := store._substitution_refusal()) is not None:
+                return {"ok": False, "error": r["error"], "segments": 0,
+                        "faced": [], "refused": [], "skipped": []}
+            os.makedirs(dis.still, exist_ok=True)
+            gate = open(real + ".lane.lock", "w")
+            fcntl.flock(gate, fcntl.LOCK_EX)
         lane = _start_marks(scratch, real, dis, files, from_start)
         titles = _candidates(store)
 
@@ -411,6 +428,9 @@ def run_lane(dis, session: str | None = None, *, dry_run: bool = False,
             for k, pos in lane.read().items():
                 done.advance(k, pos)
     finally:
+        if gate is not None:
+            fcntl.flock(gate, fcntl.LOCK_UN)
+            gate.close()
         shutil.rmtree(scratch, ignore_errors=True)
 
     return {"ok": True, "segments": read, "faced": faced,

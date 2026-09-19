@@ -19,8 +19,9 @@ A topic-shift clause ("ところで…", "by the way …") is cut off before (ii
 are looked for, so "old-way はやめよう。ところで GPU 温度を測ろう" can never make the
 GPU memory the successor of old-way.
 
-A quote that only retires — `やめる`, `廃止`, `stop` — without naming a successor is a
-`retired-only` result: retirement is proven, succession is NOT. No caller writes a
+A quote that only retires — `やめる`, `廃止`, `stop`, `退役` — is a `retired-only`
+result even when the new memory is mentioned somewhere in it: retirement is proven,
+succession is NOT, because no construction connected the two names. No caller writes a
 face for it (a face without a successor is not implemented); it is returned so the
 callers can say WHY they stayed silent.
 """
@@ -32,6 +33,13 @@ import unicodedata
 # ── the constructions that SAY a change, per language ───────────────────────
 # Each is (name, pattern). The name is the receipt: what the human's sentence was
 # read as. `…` in a construction is a gap the pattern spans loosely.
+
+# What may follow an affirmative verb form for it to count: the end of the clause —
+# punctuation, whitespace (what `_clauses` turns sentence enders into) or the end of
+# the text. Anything else (`…たくない`, `…するべきではない`, `…してはいけない`) is a
+# continuation that can negate, forbid or merely wish, and is not a ruling.
+_END = r"(?=[\s、,。．.!?！？]|$)"
+
 _REPLACEMENT = [
     ("やめて…で行く", r"やめ(?:て|で)[^。\n]{0,40}?(?:で|に)(?:行く|いく|する)"),
     ("に代えて", r"に代えて"),
@@ -53,10 +61,13 @@ _REPLACEMENT = [
     # decided, so the receipt has to recognise the same vocabulary the template does —
     # otherwise every retirement using these forms would come back `kind: None` (an
     # expected gap, not a disagreement) instead of confirming what the template found.
-    # The inflection is REQUIRED and must be the positive one: with it optional, the
-    # bare prefix `に統合` matched inside `に統合しない` and a human's explicit refusal
-    # read as succession. `しない` / `しません` / `するな` all fail to match now.
-    ("に統合", r"に統合(?:する|した|します)(?!な)"),
+    # The inflection is REQUIRED, positive, and must END the clause: with it optional,
+    # the bare prefix `に統合` matched inside `に統合しない`; with only the next character
+    # excluded, `に統合した` matched inside `に統合したくない` and `に統合する` inside
+    # `に統合するべきではない`. Only the closed forms the template itself writes —
+    # `に統合する` followed by punctuation, whitespace or the end — count; `_clauses`
+    # has already turned sentence enders into spaces.
+    ("に統合", rf"に統合(?:する|した|します){_END}"),
 ]
 
 # Retirement without a successor: proves the old thing is over, nothing more.
@@ -68,9 +79,9 @@ _RETIREMENT = [
     ("retire", r"\bretir(?:e|ed|es|ing)\b"),
     ("done with", r"\bdone with\b"),
     # See the comment on "に統合" above: this is the template's other fixed verb slot,
-    # and it has the same rule — a full positive inflection, never the bare prefix
-    # (`退役しない` / `退役してはいけない` are not retirements).
-    ("退役", r"退役(?:して|した|する|します)(?![なは])"),
+    # and it has the same rule — a full positive inflection that ends the clause, never
+    # the bare prefix (`退役しない` / `退役してはいけない` are not retirements).
+    ("退役", rf"退役(?:して|した|する|します){_END}"),
 ]
 
 # A clause that changes the subject can never supply the successor.
@@ -170,7 +181,12 @@ def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
             continue                       # (ii) — the sentence must SAY the change
         named = _names(text, new_slug, new_title)
         hits = _word_hits(text, new_words)
-        if named or len(hits) >= 2:        # (iii) — and name the successor in it
+        # (iii) — and name the successor in it. Only a REPLACEMENT construction can
+        # connect the two names: a retirement verb beside a mention of the new memory
+        # (`old-way は退役した。new-way は別物。`) proves the old thing is over and
+        # nothing about what follows it. Every proven-succession form has its own
+        # entry in `_REPLACEMENT`; `_RETIREMENT` alone stops at `retired-only`.
+        if repl and (named or len(hits) >= 2):
             return {"kind": "superseded", "old": old_slug, "new": new_slug,
                     "quote": str(q.get("text") or ""),
                     "constructions": repl + retire,

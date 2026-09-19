@@ -71,9 +71,9 @@ def _store(reg: Registry, sel: str | None) -> Store:
                  f"modes: {reg.modes}")
 
 
-def _distiller(reg: Registry, store: Store):
+def _distiller(reg: Registry, store: Store, writes: bool = True):
     from .distill import Distiller
-    return Distiller(reg, store)
+    return Distiller(reg, store, writes=writes)
 
 
 _WL_COLS = ("runnable", "target_reached", "wrong_branch", "obsolete_branch",
@@ -772,7 +772,9 @@ def main(argv: list[str] | None = None) -> int:
                  "segments": 0, "faced": [], "refused": [], "skipped": []}
             print(json.dumps(r, ensure_ascii=False, indent=1))
             return 1
-        r = run_lane(_distiller(reg, store), a.session,
+        # A dry run promises to write nothing, and that includes the directories
+        # `Distiller.__init__` would otherwise make on the store it is handed.
+        r = run_lane(_distiller(reg, store, writes=not a.dry_run), a.session,
                      dry_run=a.dry_run, from_start=a.from_start)
         print(json.dumps(r, ensure_ascii=False, indent=1))
         return 0 if r.get("ok") else 1

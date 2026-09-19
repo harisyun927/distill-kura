@@ -204,7 +204,7 @@ def _curation_of(out: str) -> tuple[list[str], dict[str, str], str | None]:
 class Distiller:
     def __init__(self, reg: Registry, store: Store, journals: dict[str, str] | None = None,
                  language: str | None = None, scribe_slots: int = 4,
-                 chunk_chars: int = CHUNK_CHARS):
+                 chunk_chars: int = CHUNK_CHARS, writes: bool = True):
         self.reg = reg
         self.store = store
         self.models = reg.models_for(store)      # never the shared set behind a profile
@@ -266,7 +266,11 @@ class Distiller:
         # the brain never answered lives here until it is drunk for real (pending.py).
         self.pending = PendingShelf(os.path.join(self.still, "pending"))
         self.pending_compose = PendingShelf(os.path.join(self.still, "pending-compose"))
-        os.makedirs(self.drafts_dir, exist_ok=True)
+        # `writes=False` is a Distiller built to LOOK (a dry run): it makes nothing on
+        # the store it is handed. Watermarks / Seeds already defer their directories
+        # to the first write; this is the one directory the constructor made itself.
+        if writes:
+            os.makedirs(self.drafts_dir, exist_ok=True)
         self._store_text: str | None = None
 
     # ── model roles (charter first, byte-identical, for the shared prefix) ──

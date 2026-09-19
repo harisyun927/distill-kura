@@ -411,3 +411,145 @@ def test_the_real_watermark_is_not_merged_through_a_substituted_store(tmp_path):
     assert r["ok"] is False and "no longer resolves" in r["error"]
     assert r["faced"] == [] and r["refused"] == []
     assert not still.exists()
+
+
+# ── round 6 (the second confirmation review) ────────────────────────────────
+
+
+def test_compound_negations_after_the_stem_prove_nothing():
+    """(review) Excluding one following character was not a rule: `に統合した` still
+    matched inside `に統合したくない`, `に統合する` inside `に統合するべきではない`. An
+    affirmative form now has to END its clause — punctuation, whitespace or the end
+    of the text — for it to count."""
+    from distill_kura.distill.transition import find_transition
+
+    old = {"slug": "old-way", "title": TITLES["old-way"]}
+    new = {"slug": "new-way", "title": TITLES["new-way"]}
+
+    def rel(text):
+        return find_transition([{"class": "USER", "text": text}], old, new)
+
+    for refusal in ("old-way は new-way に統合したくない。",
+                    "old-way は new-way に統合するべきではない。",
+                    "old-way は new-way に統合してはならない。",
+                    "old-way は退役するべきではない。new-way に統合する話は別。",
+                    "old-way は退役したくない。new-way は別物。"):
+        r = rel(refusal)
+        assert r is None or r["kind"] != "superseded", refusal
+
+    # The template's own closed forms still count, with or without the 。 that
+    # `_clauses` turns into a space.
+    for ok in ("old-way は退役して、new-way に統合する。",
+               "old-way は退役して、new-way に統合する",
+               "old-way は退役して、new-way に置き換える。"):
+        r = rel(ok)
+        assert r is not None and r["kind"] == "superseded", ok
+
+
+def test_a_bare_retirement_verb_beside_a_mention_is_retired_only():
+    """(review) `old-way は退役した。new-way は別物。` named both memories and carried a
+    retirement verb, and that was enough for `superseded` — the second sentence
+    explicitly says there is no succession. Only a REPLACEMENT construction connects
+    two names; a retirement verb alone stops at `retired-only`, for every verb in
+    the table, not just the newly added one."""
+    from distill_kura.distill.transition import find_transition
+
+    old = {"slug": "old-way", "title": TITLES["old-way"]}
+    new = {"slug": "new-way", "title": TITLES["new-way"]}
+    for text in ("old-way は退役した。new-way は別物。",
+                 "old-way はやめた。new-way は別物。",
+                 "old-way is retired. new-way is nice.",
+                 "old-way は廃止。new-way も見ておく。"):
+        r = find_transition([{"class": "USER", "text": text}], old, new)
+        assert r is not None and r["kind"] == "retired-only" and r["new"] is None, text
+
+    # And the lane never faces such a pair either.
+    assert pairs(proven(user("old-way は退役した。new-way は別物。"), TITLES)) == []
+
+
+def test_a_writing_pass_holds_the_lane_lock_before_copying_the_marks(tmp_path, monkeypatch):
+    """(review) Two writing passes each walked a private copy of the real marks, so
+    `claim()` reserved only against that copy and both read — and retired, and wrote
+    evidence for — the same stretch. A writing pass now takes an exclusive lock on
+    `retire-watermark.json.lane.lock` for its whole duration, and takes the copy only
+    once it holds it. Recorded through `flock` rather than by racing two processes:
+    the order (lock, then copy) is the property."""
+    from distill_kura.distill import retire_lane as rl
+
+    still = tmp_path / "_still"
+    still.mkdir()
+    real = still / "retire-watermark.json"
+    real.write_text('{"j": 7}', encoding="utf-8")
+    events: list[str] = []
+    orig_flock, orig_start = rl.fcntl.flock, rl._start_marks
+
+    def flock(fd, op):
+        name = getattr(fd, "name", "")
+        if name.endswith(".lane.lock"):
+            events.append("lock" if op == rl.fcntl.LOCK_EX else "unlock")
+        return orig_flock(fd, op)
+
+    def start(*a, **kw):
+        events.append("copy")
+        return orig_start(*a, **kw)
+
+    monkeypatch.setattr(rl.fcntl, "flock", flock)
+    monkeypatch.setattr(rl, "_start_marks", start)
+
+    class Plain:
+        name = "stub"
+        path = str(tmp_path)
+        write_policy = "append"
+
+        def _substitution_refusal(self):
+            return None
+
+        def titles(self):
+            return {}
+
+        def slug_set(self):
+            return set()
+
+    dis = SimpleNamespace(store=Plain(), still=str(still), chunk_chars=4000,
+                          marks=SimpleNamespace(read=lambda: {}),
+                          files=lambda session=None: [])
+    assert run_lane(dis)["ok"] is True
+    assert events == ["lock", "copy", "unlock"]
+    assert (still / "retire-watermark.json.lane.lock").exists()
+
+    # A dry run takes no lock and copies as before.
+    events.clear()
+    assert run_lane(dis, dry_run=True)["ok"] is True
+    assert events == ["copy"]
+
+
+def test_cli_dry_run_makes_nothing_on_a_writable_store(tmp_path):
+    """(review) `--dry-run` promised to write nothing, but the CLI built a `Distiller`
+    first, whose constructor made `_still/drafts` (and Watermarks / Seeds made their
+    own parent) on the store it was handed. Snapshot the store tree before and after
+    a dry run and require them identical."""
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from distill_kura import cli
+    from distill_kura.store import Store
+
+    s = Store(name="w", path=str(tmp_path / "w"), label="w")
+    s.init_files()
+    cfg = tmp_path / "kura.toml"
+    cfg.write_text(f"""
+default = "w"
+[stores.w]
+path = "{s.path}"
+write_policy = "direct-allowed"
+[stores.w.distill]
+inherit_global_journals = false
+""", encoding="utf-8")
+
+    def tree():
+        return sorted(os.path.relpath(os.path.join(d, n), s.path)
+                      for d, ds, fs in os.walk(s.path) for n in ds + fs)
+
+    before = tree()
+    assert cli.main(["-c", str(cfg), "-s", "w", "retire-lane", "--dry-run"]) == 0
+    assert tree() == before
