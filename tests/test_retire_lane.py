@@ -309,7 +309,7 @@ def test_a_reason_that_names_a_third_thing_via_particles_is_refused():
 # gone: it asserted `find_transition`'s receipt carried separate `"退役"` / `"に統合"`
 # construction names, reconciling a SEPARATE construction table against the template.
 # Round A′ (2026-09-19) deleted that separate table — `find_transition` now matches the
-# same shared `TEMPLATE` this lane does, so there is nothing left to reconcile; the
+# same shared `template` this lane does, so there is nothing left to reconcile; the
 # receipt's `constructions` is now the fixed `["閉じた型: 退役して/に置き換える"]` for
 # every template match (see `tests/test_transition.py`). Consistency between the lane
 # and `find_transition` is still exercised below and in `test_retirement_face.py`.
@@ -614,6 +614,21 @@ def test_a_study_slug_may_stand_in_either_slot_and_is_not_its_basename():
                         {"slug": "_study/old-note", "title": "Old note"},
                         {"slug": "new-way", "title": "The new way"})
     assert r is not None and r["kind"] == "superseded"
+
+    # (review, A′ round 2) A study note's basename is whatever file the store holds —
+    # `design.v2`, `design note` — so there is no slug grammar at all: the slots are
+    # built from the store's exact candidate names.
+    titles3 = {**titles, "_study/design.v2": "Design v2", "_study/design note": "Design note"}
+    out = proven(user("_study/design.v2 はやめて、_study/design note に統合する。"), titles3)
+    assert pairs(out) == [("_study/design.v2", "_study/design note")]
+    r = find_transition([{"class": "USER",
+                          "text": "_study/design.v2 はやめて、_study/design note に統合する。"}],
+                        {"slug": "_study/design.v2", "title": "Design v2"},
+                        {"slug": "_study/design note", "title": "Design note"})
+    assert r is not None and r["kind"] == "superseded"
+    # And a name the store does NOT hold is not a name, however slug-shaped.
+    out = proven(user("_study/design.v3 はやめて、new-way に統合する。"), titles3)
+    assert pairs(out) == []
 
     # `_study/brain` names nothing called `brain`: no pair, and not counted as a name.
     titles2 = {**titles, "_study/brain": "Brain note"}

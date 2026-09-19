@@ -398,7 +398,7 @@ round found; the holes were in the METHOD, not any one implementation. Round A�
 `find_transition(evidence, old, new)` is the whole relation, pure and model-free, and it
 now proves `superseded` from exactly ONE thing: some physical line of a [USER] quote is
 an exact whole-line match of the closed template `distill/retire_lane.py` already
-carries (`TEMPLATE` / `parse_instruction`, defined once in `transition.py` and shared by
+carries (`template` / `parse_instruction`, defined once in `transition.py` and shared by
 both):
 
     <old-slug> は [one reason sentence naming no candidate slug、ending in 役目終わり。]

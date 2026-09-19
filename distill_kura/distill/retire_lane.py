@@ -50,7 +50,7 @@ matching the template says so out loud (`skipped: "direction not established by 
 construction"`) rather than staying silent, so the person can go use that door.
 
 Round A′ (2026-09-19) moved the template itself into `distill/transition.py`
-(`TEMPLATE`, `parse_instruction`) as the single source: `find_transition` now proves
+(`template`, `parse_instruction`) as the single source: `find_transition` now proves
 `superseded` from the SAME closed grammar this lane matches, not from free text. This
 file keeps only what is genuinely its own — the candidate-set resolution (is each
 matched token actually a slug this store holds? does the reason clause avoid naming a
@@ -85,7 +85,7 @@ from datetime import datetime, timezone
 
 from ..store import FROZEN
 from .sources import call_sip, source_for
-from .transition import TEMPLATE, _norm, find_transition
+from .transition import _norm, find_transition, parse_instruction
 from .watermark import Watermarks
 
 # A stretch naming more names than this is not an instruction, it is a list (an index
@@ -146,21 +146,15 @@ def _match_template(line: str, candidates: dict[str, str]) -> tuple[str, str] | 
     None if it is not an exact match — a valid-looking fragment inside a longer line is
     not the person's whole ruling.
 
-    `TEMPLATE` itself lives in `distill/transition.py` now (round A′, 2026-09-19) —
-    this function is the candidate-set layer on top of it: is each matched token
-    actually a slug this store holds, and does the optional reason clause avoid
-    naming some third one. That resolution is specific to this lane (it needs the
-    store's candidate set) and does not belong in the pure template match."""
-    low = _norm(line)
-    m = TEMPLATE.match(low)
-    if not m:
+    The template itself lives in `distill/transition.py` now (round A′, 2026-09-19)
+    and is built from the store's own candidate slugs, so a slot can only ever hold a
+    name this store holds — whatever characters that name has (`_study/design.v2`).
+    This function adds the one check that needs the whole candidate set: the optional
+    reason clause must not name some third memory."""
+    hit = parse_instruction(line, list(candidates))
+    if hit is None:
         return None
-    by_lower = {slug.lower(): slug for slug in candidates}
-    old = by_lower.get(m.group("old"))
-    new = by_lower.get(m.group("new"))
-    if not old or not new or old == new:
-        return None                        # unknown slug, or a memory "succeeding" itself
-    reason = m.group("reason")
+    old, new, reason = hit
     if reason and any(_names_slug(reason, slug) or _names_title(reason, title)
                       for slug, title in candidates.items()):
         return None                        # the reason clause is not about a third memory
@@ -173,7 +167,7 @@ def _accept(line: str, old: str, new: str, candidates: dict[str, str]) -> dict:
     read one spec.
 
     Since round A′ (2026-09-19) `find_transition` proves `superseded` from the exact
-    same closed template this lane matches (`transition.TEMPLATE` /
+    same closed template this lane matches (`transition.template` /
     `parse_instruction`) — not from free text, not from word order. So this is no
     longer an independent second opinion by a different method: it is the same
     grammar, re-applied to whichever physical line of `line` proves the pair, as a

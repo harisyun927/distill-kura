@@ -3,7 +3,7 @@
 Every test is named for the failure it prevents. The relation is pure and knows
 nothing about the model's proposal on purpose: what writes `現在は [[new]]` into
 canonical is an exact whole-line match of the one closed template
-(`distill_kura.distill.transition.TEMPLATE`), or nothing. Free text — however
+(`distill_kura.distill.transition.template`), or nothing. Free text — however
 plausible, however explicit it reads to a person — is never proof of a direction
 (round A′, 2026-09-19); it can still be reference information (`retired-only`).
 """

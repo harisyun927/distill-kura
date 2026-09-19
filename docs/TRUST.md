@@ -78,7 +78,7 @@ USER-class quote naming the old memory, so a tool call cannot reach it under any
 `write_policy`, and `frozen` refuses it like everything else. Naming the old memory is
 the floor, not the proof: the same manifest must also carry a [USER] quote whose text
 contains an exact, whole-line match of the one closed template
-(`distill/transition.py`'s `TEMPLATE` / `parse_instruction`, the same grammar
+(`distill/transition.py`'s `template` / `parse_instruction`, the same grammar
 `distill/retire_lane.py` matches) naming exactly this old → new pair — proposed ≠
 proven, and a model proposing a `superseded` tag (or the gate refusing it) counts for
 nothing, and neither does any other phrasing of the same idea in free text (six review

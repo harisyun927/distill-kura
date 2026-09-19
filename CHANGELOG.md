@@ -5,7 +5,7 @@
 - distill/store: `superseded` may now be proven ONLY by an exact, whole-line match of
   the one closed template `distill/retire_lane.py` already carried (`<old-slug> は
   [reason ending 役目終わり。] (退役して|やめて)、<new-slug> (に置き換える|に統合する)`),
-  now defined once in `distill/transition.py` (`TEMPLATE`, `parse_instruction`) and
+  now defined once in `distill/transition.py` (`template`, `parse_instruction`) and
   shared by both `find_transition` and the lane. Six review rounds found six new free-
   text phrasings (`やめて…で行く`, `に代えて`, `→`, `replace … with`, `switch to`, a
   title-word successor) that fooled the old construction-table reading; conversation

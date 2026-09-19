@@ -49,52 +49,63 @@ import unicodedata
 # `_norm`) may sit between a name and its particle, and nowhere else the pattern does
 # not already allow for.
 #
-# `<old-slug>` and `<new-slug>` are read only as raw slug-shaped tokens here — whether
-# they are actually known slugs in a given store, and whether the optional reason
-# clause names some THIRD candidate, is candidate-set logic that belongs to the
-# caller (`retire_lane.py`'s `_match_template`), not to this pure relation.
+# `<old-slug>` and `<new-slug>` are not a grammar of slug shapes: `template(names)`
+# builds the two slots from the exact names the caller hands it (the store's candidate
+# set in the lane, the (old, new) pair in hand for `find_transition`). Whether the
+# optional reason clause names some THIRD candidate is the lane's own check.
 _WS = r" *"
-# A store's slugs are `name` or `_study/name` (long-form notes, see store.py) — the
-# `/` is part of the name, and both shapes may stand in either slot.
-_SLUG = r"(?:_study/)?[0-9a-z_\-]+"
 # The middle sentence carries a reason and NOTHING else: no subject/topic/object marker
 # and no comma, so a clause naming a THIRD thing (in a different voice) cannot slip
 # through as "just the reason". It must end in the one fixed phrase 役目終わり, right
 # before the sentence's own 。.
 _REASON = r"[^はがを、\n。]*役目終わり"
-TEMPLATE = re.compile(
-    rf"^(?P<old>{_SLUG}){_WS}は{_WS}"
-    rf"(?:(?P<reason>{_REASON})。{_WS})?"
-    rf"(?:退役して|やめて)、{_WS}"
-    rf"(?P<new>{_SLUG}){_WS}"
-    rf"(?:に置き換える|に統合する)"
-    rf"。?$"
-)
 
 
 def _norm(s: str) -> str:
     return unicodedata.normalize("NFKC", str(s or "")).lower()
 
 
-def parse_instruction(line: str) -> tuple[str, str] | None:
-    """The (old, new) slugs ONE line proves under the closed template, or None.
+def template(names: "list[str] | tuple[str, ...]") -> re.Pattern:
+    """The closed template, with both name slots restricted to EXACTLY the given
+    names (already the caller's exact slugs; normalised here the way the line is).
 
-    `line` is NFKC-normalised and lower-cased here (idempotent if the caller already
-    did it). The match is whole-line-anchored: a valid-looking fragment inside a
-    longer line is not a ruling, and multiple template lines in one quote each stand
-    on their own (call this once per physical line).
-
-    This is the raw grammar only — no candidate-set check, no reason-clause-names-a-
-    third-memory check. A caller that has a store's own slug set (`retire_lane.py`)
-    matches `TEMPLATE` directly so it can also read `reason` and validate both names
-    against that set; this wrapper is for callers (like `find_transition`, below)
-    that only need to know whether a line proves a SPECIFIC (old, new) pair they
-    already have in hand.
+    There is no grammar of what a slug looks like here on purpose: a store's slug is
+    whatever file it holds (`name`, `_study/name`, `_study/design.v2`, …), so the only
+    correct definition of "a name in the slot" is "one of the names the caller knows".
+    Longest names first, so `new-way-v2` is never read as `new-way` + stray text — and
+    the surrounding particle/verb is required immediately after, so it cannot be.
     """
-    m = TEMPLATE.match(_norm(line))
+    alts = sorted({_norm(n).strip() for n in names if _norm(n).strip()},
+                  key=len, reverse=True)
+    alt = "|".join(re.escape(a) for a in alts) or "(?!)"
+    return re.compile(
+        rf"^(?P<old>{alt}){_WS}は{_WS}"
+        rf"(?:(?P<reason>{_REASON})。{_WS})?"
+        rf"(?:退役して|やめて)、{_WS}"
+        rf"(?P<new>{alt}){_WS}"
+        rf"(?:に置き換える|に統合する)"
+        rf"。?$"
+    )
+
+
+def parse_instruction(line: str, names: "list[str] | tuple[str, ...]"
+                      ) -> tuple[str, str, str | None] | None:
+    """The (old, new, reason) ONE line proves under the closed template, with old and
+    new drawn from `names` (returned in the caller's own spelling), or None.
+
+    `line` is NFKC-normalised and lower-cased here. The match is whole-line-anchored:
+    a valid-looking fragment inside a longer line is not a ruling, and multiple
+    template lines in one quote each stand on their own (call this once per physical
+    line). A name "succeeding" itself is not an instruction.
+    """
+    m = template(names).match(_norm(line))
     if not m:
         return None
-    return m.group("old"), m.group("new")
+    back = {_norm(n).strip(): n for n in names}
+    old, new = back[m.group("old")], back[m.group("new")]
+    if old == new:
+        return None
+    return old, new, m.group("reason")
 
 
 # ── retired-only: reference information, never proof of a successor ─────────────────
@@ -170,7 +181,7 @@ def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
 
     Conversation language ≠ authorisation language: a proposal, a paraphrase, an
     arrow, an "instead of" — none of it counts, however plausible it reads. Only the
-    closed template (`TEMPLATE` / `parse_instruction`, above) can produce
+    closed template (`template` / `parse_instruction`, above) can produce
     `superseded`.
     """
     old_slug, old_title = str(old.get("slug") or ""), str(old.get("title") or "")
@@ -188,8 +199,8 @@ def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
         # (superseded) — each physical line stands on its own; a template spanning
         # a newline, or sharing a line with other prose, is not a whole-line match.
         for line in whole.splitlines():
-            hit = parse_instruction(line)
-            if hit == (old_norm, new_norm):
+            hit = parse_instruction(line, (old_slug, new_slug))
+            if hit is not None and (hit[0], hit[1]) == (old_slug, new_slug):
                 return {"kind": "superseded", "old": old_slug, "new": new_slug,
                         "quote": str(q.get("text") or ""),
                         "constructions": ["閉じた型: 退役して/に置き換える"]}
