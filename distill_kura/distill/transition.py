@@ -120,6 +120,57 @@ _TEMPLATES = (
     (template_en, "閉じた型: retire/replaced by"),
 )
 
+# ── decomposition, not the full names×names product ─────────────────────────────────
+#
+# A store's `slugs()` accepts any Markdown basename, so nothing stops it holding
+# `a`, `a, replaced by b`, `b, replaced by c` and `c` side by side. Against that store,
+# `retire a, replaced by b, replaced by c.` reads TWO ways under the closed English
+# template — (old=a, new="b, replaced by c") and (old="a, replaced by b", new=c) — and
+# the old "try the alternation, take whichever it lands on" reading picked the longest
+# name silently. A line whose decomposition is not unique proves nothing; it is refused
+# exactly like a line that matches no template at all.
+#
+# Enumerating every (old, new) pair from `names` (hundreds, in the lane) would be the
+# full product. Instead: `old` can only be a name the line could START with (right
+# after `retire ` for the English template, at the line's own head for the Japanese
+# one); `new` can only be a name the line could END with (right before the trailing
+# `.`/`。`, past `replaced by` / `に置き換える|に統合する`). Only the pairs that survive
+# both filters are confirmed by building the REAL two-name template and matching the
+# whole line — small counts on both sides of the product, not `len(names)**2`.
+_JP_OLD_START_FMT = r"^{name}"
+_JP_NEW_END_FMT = r"{name}" + _WS + r"(?:に置き換える|に統合する)。?$"
+_EN_OLD_START_FMT = r"^retire" + _EN_WS + r"{name}"
+_EN_NEW_END_FMT = r", *replaced" + _EN_WS + r"by" + _EN_WS + r"{name}\.?$"
+
+
+def _decompositions(normed: str, names: "Iterable[str]", build,
+                    old_start_fmt: str, new_end_fmt: str
+                    ) -> set[tuple[str, str]]:
+    """Every NORMALISED (old, new) pair whose own two-name template — `build([old,
+    new])`, not the full-`names` one — matches `normed` in full, for one closed
+    template. See the module note above for why this is a filtered pair search, not
+    the `names` × `names` product.
+    """
+    old_ok: set[str] = set()
+    new_ok: set[str] = set()
+    for n in names:
+        nn = _norm(n).strip()
+        if not nn:
+            continue
+        if re.match(old_start_fmt.format(name=re.escape(nn)), normed):
+            old_ok.add(nn)
+        if re.search(new_end_fmt.format(name=re.escape(nn)), normed):
+            new_ok.add(nn)
+    found: set[tuple[str, str]] = set()
+    for on in old_ok:
+        for nn in new_ok:
+            if on == nn:
+                continue
+            m = build([on, nn]).match(normed)
+            if m and m.group("old") == on and m.group("new") == nn:
+                found.add((on, nn))
+    return found
+
 
 def parse_instruction(line: str, names: "list[str] | tuple[str, ...]"
                       ) -> tuple[str, str, str | None] | None:
@@ -129,17 +180,27 @@ def parse_instruction(line: str, names: "list[str] | tuple[str, ...]"
     `line` is NFKC-normalised and lower-cased here. The match is whole-line-anchored:
     a valid-looking fragment inside a longer line is not a ruling, and multiple
     template lines in one quote each stand on their own (call this once per physical
-    line). A name "succeeding" itself is not an instruction. The Japanese template is
-    tried first, then the English one; only the Japanese template has a `reason` slot.
+    line). A name "succeeding" itself is not an instruction.
+
+    A line may decompose into an (old, new) pair more than one way when the store
+    holds names built out of other names (`a`, `a, replaced by b`, `b, replaced by c`,
+    `c` — see `_decompositions`). A non-unique decomposition proves nothing: it is
+    refused exactly like no match at all, for both templates alike. The Japanese
+    template is preferred when both would otherwise apply (only it has a `reason`
+    slot); a line whose NORMALISED text matches both closed templates at once is
+    refused too — that should not be reachable given how different the two templates'
+    fixed literals are, but this function does not trust "should not happen" over its
+    own check.
     """
     normed = _norm(line)
-    m = None
-    for build, _label in _TEMPLATES:
-        m = build(names).match(normed)
-        if m:
-            break
-    if not m:
+    jp = _decompositions(normed, names, template, _JP_OLD_START_FMT, _JP_NEW_END_FMT)
+    en = _decompositions(normed, names, template_en, _EN_OLD_START_FMT, _EN_NEW_END_FMT)
+    if jp and en:
         return None
+    decomps, build = (jp, template) if jp else (en, template_en)
+    if len(decomps) != 1:
+        return None
+    ((old_norm, new_norm),) = decomps
     # Two of the caller's names may fold to the same normalised spelling (`Old` and
     # `old`, or an NFKC pair). A slot that matched such a spelling names BOTH — which
     # is to say it names neither exactly — and is refused rather than resolved to
@@ -147,13 +208,14 @@ def parse_instruction(line: str, names: "list[str] | tuple[str, ...]"
     back: dict[str, set[str]] = {}
     for n in names:
         back.setdefault(_norm(n).strip(), set()).add(n)
-    olds, news = back[m.group("old")], back[m.group("new")]
+    olds, news = back.get(old_norm, set()), back.get(new_norm, set())
     if len(olds) != 1 or len(news) != 1:
         return None
     (old,), (new,) = olds, news
     if old == new:
         return None
-    return old, new, m.groupdict().get("reason")
+    m = build((old_norm, new_norm)).match(normed)
+    return old, new, (m.groupdict().get("reason") if m else None)
 
 
 # ── retired-only: reference information, never proof of a successor ─────────────────

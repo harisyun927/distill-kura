@@ -16,7 +16,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from distill_kura.distill.transition import find_transition       # noqa: E402
+from distill_kura.distill.transition import (                     # noqa: E402
+    find_transition, parse_instruction,
+)
 
 
 def _t(text, old=("old-way", "the old way"), new=("new-way", "the new way"), topic=""):
@@ -208,3 +210,41 @@ def test_two_lines_each_prove_their_own_pair():
                          {"slug": "third-thing", "title": "Third thing"},
                          {"slug": "fourth-thing", "title": "Fourth thing"})
     assert r2 and r2["kind"] == "superseded" and r2["new"] == "fourth-thing"
+
+
+# ── a decomposition that is not unique proves nothing (Codex P2, transition.py:114) ─
+# When the store's OWN slugs are built out of other slugs, the closed English
+# template's alternation can read one line two ways: `retire a, replaced by b,
+# replaced by c.` is both (old=a, new="b, replaced by c") and
+# (old="a, replaced by b", new=c). Neither reading may win silently.
+
+def test_an_ambiguous_english_decomposition_proves_neither_reading():
+    names = {"a", "a, replaced by b", "b, replaced by c", "c"}
+    line = "retire a, replaced by b, replaced by c."
+    assert parse_instruction(line, names) is None
+    r = find_transition([{"class": "USER", "text": line}],
+                        {"slug": "a", "title": ""},
+                        {"slug": "b, replaced by c", "title": ""}, known=names)
+    assert r is None or r["kind"] != "superseded"
+
+
+def test_the_same_line_proves_when_the_decomposition_is_unique():
+    names = {"a", "b, replaced by c"}
+    line = "retire a, replaced by b, replaced by c."
+    assert parse_instruction(line, names) == ("a", "b, replaced by c", None)
+
+
+def test_an_ambiguous_japanese_decomposition_proves_neither_reading():
+    names = {"x", "x はやめて、y", "y", "z", "y はやめて、z"}
+    line = "x はやめて、y はやめて、z に統合する。"
+    assert parse_instruction(line, names) is None
+    r = find_transition([{"class": "USER", "text": line}],
+                        {"slug": "x", "title": ""},
+                        {"slug": "y はやめて、z", "title": ""}, known=names)
+    assert r is None or r["kind"] != "superseded"
+
+
+def test_the_same_japanese_line_proves_when_the_decomposition_is_unique():
+    names = {"x", "y はやめて、z"}
+    line = "x はやめて、y はやめて、z に統合する。"
+    assert parse_instruction(line, names) == ("x", "y はやめて、z", None)
