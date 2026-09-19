@@ -34,8 +34,12 @@ class Claim(NamedTuple):
 
 class Watermarks:
     def __init__(self, path: str):
+        # Construction is read-only: the directory is made by the first write, so a
+        # dry run that builds a Distiller to LOOK at a store leaves no `_still` behind.
         self.path = path
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    def _ensure_dir(self) -> None:
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
 
     def read(self) -> dict[str, int]:
         if not os.path.exists(self.path):
@@ -54,6 +58,7 @@ class Watermarks:
 
     def advance(self, key: str, pos: int) -> None:
         """Move forward only. A stale value must never pull the mark backwards."""
+        self._ensure_dir()
         with open(self.path + ".lock", "w") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)
             try:
@@ -73,6 +78,7 @@ class Watermarks:
         bounded discard progress through an irreversibly-oversized line and the
         caller must retry without treating silence as completion.
         """
+        self._ensure_dir()
         with open(self.path + ".lock", "w") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)
             try:

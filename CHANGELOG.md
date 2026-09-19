@@ -2,6 +2,24 @@
 
 ## 0.3.0
 
+- distill/store: `superseded` may now be proven ONLY by an exact, whole-line match of
+  the one closed template `distill/retire_lane.py` already carried (`<old-slug> は
+  [reason ending 役目終わり。] (退役して|やめて)、<new-slug> (に置き換える|に統合する)`),
+  now defined once in `distill/transition.py` (`template`, `parse_instruction`) and
+  shared by both `find_transition` and the lane. Six review rounds found six new free-
+  text phrasings (`やめて…で行く`, `に代えて`, `→`, `replace … with`, `switch to`, a
+  title-word successor) that fooled the old construction-table reading; conversation
+  language ≠ authorisation language, so free text no longer proves a direction at all —
+  it can still prove `retired-only` (the old thing is over, informational, never a
+  successor) from the loose retirement vocabulary, but never `superseded`. `retire_lane`
+  keeps its own candidate-set resolution (slug validation, the reason-clause-names-no-
+  third-memory check, `MAX_NAMES`, loud-skip behaviour) on top of the shared template;
+  `Store.retire`'s and the pipeline's re-run of `find_transition` are now checks that
+  both sides read one spec, not a second, independent method. (round A′, 2026-09-19) —
+  unreleased
+
+- distill: `extend_mode = "append" | "continue"` (per store or global `[distill]`, default `append`). In `continue`, an EXTENDS verdict no longer writes into the existing memory — whose curation sentences and mark the pour used to replace with the newcomer's — but takes the new-memory path with a code-written first line `（続き: [[old-slug]]）`, which `edges.derive` reads as `continues`. The old file stays byte-identical. In that mode `pour()` also refuses an `EXTENDS:` draft, and a new memory whose slug the store already holds is staged as `slug-2` (and refused at pour if it still collides). SPOT/COVERAGE now ask for `belongs_because`/`keep`/`may_fade` in the store `language`, and an extension heading is always `## `. — fork, unreleased
+
 - warm: the debounce key is now a *signature* — the recall prompt hash plus the thinker's identity (url, model, dialect, template settings, extra). The cache lives in the mouth, not the store: the same index on another mouth is cold. A mouth that merely restarted is its service manager's job: call `kura warm --force` from an ExecStartPost hook. The warm track now runs AFTER tidy, so a tidy that rewrites the index does not make the watcher pay the cold prefill twice. (Rina, 2026-09-03) — unreleased
 
 ### Warming the thinker after the index moves (`kura warm`)

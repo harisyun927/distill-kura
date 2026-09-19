@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 
 from ..recall import recall as kura_recall
 from ..tokens import estimate
-from ..registry import Registry
+from ..registry import EXTEND_MODES, Registry
 from ..store import ANNOTATION_KEYS, FROZEN, Store, normalize_tags
 from . import prompts, transition
 from .gate import (attributes_to_human, composed_number_violations,
@@ -138,6 +138,16 @@ def _safe_slug(raw: str) -> str:
     return f"{s}-{h}" if s else f"memory-{h}"
 
 
+# The continuation line a `continue`-mode memory opens with. `続き` is one of
+# edges._CONTINUES, and the link sits on the same line, so the edge map reads it.
+CONTINUE_LINE = "（続き: [[{target}]]）"
+
+
+def _store_slug(slug: str) -> str:
+    """The name `Store._write` will actually file `slug` under."""
+    return re.sub(r"[^a-z0-9-]+", "-", slug.lower()).strip("-")
+
+
 def _free_path(directory: str, base: str, suffix: str = ".md") -> str:
     """`<base>.md` in `directory`, or `<base>.2.md`, `<base>.3.md`… if that exists.
 
@@ -194,7 +204,7 @@ def _curation_of(out: str) -> tuple[list[str], dict[str, str], str | None]:
 class Distiller:
     def __init__(self, reg: Registry, store: Store, journals: dict[str, str] | None = None,
                  language: str | None = None, scribe_slots: int = 4,
-                 chunk_chars: int = CHUNK_CHARS):
+                 chunk_chars: int = CHUNK_CHARS, writes: bool = True):
         self.reg = reg
         self.store = store
         self.models = reg.models_for(store)      # never the shared set behind a profile
@@ -228,6 +238,14 @@ class Distiller:
         self.max_items = int(scfg.get("max_items") or cfg.get("max_items") or 4)
         self.coverage_passes = int(scfg.get("coverage_passes")
                                    or cfg.get("coverage_passes") or 1)
+        # What an EXTENDS verdict does. "append" (the default) writes a dated section
+        # into the existing memory. "continue" leaves the existing memory byte-for-byte
+        # alone and writes a NEW memory whose body links back with a continuation line
+        # — the old memory's annotations, curation mark and origin stay its own.
+        self.extend_mode = str(scfg.get("extend_mode") or cfg.get("extend_mode") or "append")
+        if self.extend_mode not in EXTEND_MODES:
+            raise ValueError(f"distill extend_mode must be one of {list(EXTEND_MODES)}, "
+                             f"got {self.extend_mode!r}")
         self.charter = (open(store.charter, encoding="utf-8").read()
                         if store.charter and os.path.exists(store.charter)
                         else prompts.DEFAULT_CHARTER)
@@ -248,7 +266,11 @@ class Distiller:
         # the brain never answered lives here until it is drunk for real (pending.py).
         self.pending = PendingShelf(os.path.join(self.still, "pending"))
         self.pending_compose = PendingShelf(os.path.join(self.still, "pending-compose"))
-        os.makedirs(self.drafts_dir, exist_ok=True)
+        # `writes=False` is a Distiller built to LOOK (a dry run): it makes nothing on
+        # the store it is handed. Watermarks / Seeds already defer their directories
+        # to the first write; this is the one directory the constructor made itself.
+        if writes:
+            os.makedirs(self.drafts_dir, exist_ok=True)
         self._store_text: str | None = None
 
     # ── model roles (charter first, byte-identical, for the shared prefix) ──
@@ -296,7 +318,8 @@ class Distiller:
         a failure instead; here we only tell the two apart."""
         limit = max_items or self.max_items
         try:
-            raw = self.brain(prompts.SPOT_SYS.format(max_items=limit), as_evidence(segs), 5000)
+            raw = self.brain(prompts.SPOT_SYS.format(max_items=limit, language=self.language),
+                             as_evidence(segs), 5000)
         except Exception as e:                  # a socket that died mid-read, say
             return [], {"reason": "transient", "detail": f"{type(e).__name__}: {e}"}
         err = self.models.brain.last_error      # cleared on every answered call
@@ -314,7 +337,8 @@ class Distiller:
                 break
             already = "\n".join(f"- {c.get('topic')}: {c.get('why')}" for c in found)
             more = salvage(self.brain(
-                prompts.COVERAGE_SYS.format(max_items=limit - len(found)),
+                prompts.COVERAGE_SYS.format(max_items=limit - len(found),
+                                            language=self.language),
                 f"=== ALREADY TAKEN ===\n{already or '(nothing yet)'}\n\n"
                 f"=== THE MATERIAL ===\n{as_evidence(segs)}", 5000))
             if not more:
@@ -346,9 +370,28 @@ class Distiller:
                            "the verdict line, e.g. `EXTENDS some-slug`.", 300)
         first = out.splitlines()[0].split() if out.strip() else []
         verdict = (first[0].upper() if first else "NEW")
+        verdict = verdict if verdict in ("COVERED", "EXTENDS", "NEW") else "NEW"
         named = next((w for w in first[1:] if w.strip("`,.") in names), None)
-        return ((verdict if verdict in ("COVERED", "EXTENDS", "NEW") else "NEW"),
-                " ".join(out.splitlines()[1:])[:200], (named.strip("`,.") if named else names[0]))
+        if verdict in ("COVERED", "EXTENDS") and not named:
+            # The top recall hit used to stand in for the memory the model did not
+            # name — and a COVERED then dropped the candidate, an EXTENDS rewrote a
+            # memory, on a neighbour nobody chose. No name, no relation.
+            return "NEW", "verdict named no neighbour; treated as NEW", None
+        return (verdict, " ".join(out.splitlines()[1:])[:200],
+                (named.strip("`,.") if named else None))
+
+    def _route_extends(self, c: dict, target: str | None, why: str) -> dict:
+        """Where an EXTENDS verdict goes.
+
+        `append` (the default) marks the candidate to be written INTO `target`. That
+        rewrites a memory another run already signed: its body grows, and the pour
+        replaces its curation sentences and re-signs its mark with the newcomer's.
+        `continue` never touches `target`: the candidate takes the new-memory path and
+        code adds one line linking back (`CONTINUE_LINE`), which `edges.derive` reads
+        as a `continues` edge."""
+        if self.extend_mode == "continue" and target:
+            return {**c, "continues_from": target, "extends_why": why}
+        return {**c, "extends": target, "extends_why": why}
 
     # ── recurrence: one word, once ───────────────────────────────────────
     #
@@ -521,6 +564,13 @@ class Distiller:
                                            error_endpoint=error_endpoint,
                                            known_slugs=known_slugs,
                                            observations=observations)
+        # continue mode: the link back is code's claim, never the scribe's. A target
+        # that has left the store gets no line — a dead link would fail the floor.
+        cont_target = c.get("continues_from")
+        if cont_target and cont_target not in self.store.slug_set():
+            _log(f"      · {cont_target} is not in the store; written without a continuation line")
+            cont_target = None
+        cont = CONTINUE_LINE.format(target=cont_target) if cont_target else ""
         ev = _evidence_lines(c["evidence"])
         if near is None:
             near = kura_recall(self.store, self.models.thinker,
@@ -574,15 +624,18 @@ class Distiller:
             _, s_ann, _ = _curation_of(out)
             cand_ann = " ".join(str(c.get(k) or "") for k in ANNOTATION_KEYS)
             surface = "\n".join([slug.group(1), (title.group(1) if title else ""), text,
-                                 " ".join(s_ann.values()), cand_ann])
+                                 " ".join(s_ann.values()), cand_ann, cont])
             topology = (set(known_slugs) if known_slugs is not None
                         else set(self._known_slugs(_safe_slug(slug.group(1)))))
             # The output's own slug is code-chosen and is live in the same breath. A
             # frozen packet supplies the rest of the topology; omitting this one
             # mechanical member would reject a self-link that production accepts.
             topology.add(_safe_slug(slug.group(1)))
+            if cont_target:
+                topology.add(cont_target)
+            # `allowed=cont`: digits in the target's slug are code's, like a heading date.
             bad = final_surface_violations(surface, c["evidence"], c["classes"],
-                                           known_slugs=topology)
+                                           allowed=cont, known_slugs=topology)
             if observations is not None:
                 observations.append({"attempt": attempt, "shape": False,
                                      "surface": surface, "violations": list(bad)})
@@ -596,6 +649,8 @@ class Distiller:
                      "(do not compute new ones); never credit the human without their "
                      "own quoted words.\n")
         _, plain = _split_draft(body.group(1))
+        if cont:
+            plain = cont + "\n\n" + plain
         return self._draft_record(c, out, slug=_safe_slug(slug.group(1)),
                                   title=(title.group(1).strip()[:40] if title else ""),
                                   description=desc.group(1).strip()[:200], body=plain)
@@ -691,6 +746,10 @@ class Distiller:
         head = self._DATE_IN_TEXT.sub(date, head)
         if date not in head:
             head = f"## {date} " + head.lstrip("#").strip()
+        # A SECTION line with the date but no `## ` ("2026-08-20 notes") used to land
+        # as a bare body line: the extension then had no heading at all.
+        if not head.startswith("## "):
+            head = "## " + head.lstrip("#").strip()
         # The floor runs AFTER the mechanical date stamp: the heading's date is
         # code's claim, so it rides in `allowed`; every other number — a "99x" in
         # the section, the body, the curation sentences — must be the evidence's.
@@ -794,6 +853,10 @@ class Distiller:
         # fallback name, or two English ones sanitise alike), and staging straight to
         # `<slug>.md` overwrote the draft already standing there — gate-passed work
         # gone with nothing logged. The second draft takes a numbered name instead.
+        # Only in `continue` mode: `append` keeps its long-standing behaviour, where a
+        # later draft of the same slug replaces the memory (tests/test_write_authority).
+        if self.extend_mode == "continue" and not d.get("extends"):
+            d["slug"] = self._unused_slug(d["slug"])
         p = _free_path(self.drafts_dir, d["slug"])
         staged = os.path.basename(p)[:-3]
         ev = _evidence_lines(d["evidence"], limit=300, indent="  ")
@@ -832,6 +895,23 @@ class Distiller:
         # under a file that is not this one.
         d["slug"] = staged
         return p
+
+    def _unused_slug(self, slug: str) -> str:
+        """`slug`, or `slug-2`, `slug-3`… if the STORE already holds that name.
+
+        A NEW-memory draft poured under a name the store holds replaced that memory's
+        whole body. The name is chosen here, before the mark and the manifest are
+        written, so the signed name, the manifest's `memory_slug` and the poured file
+        agree. `-n` (not `_free_path`'s `.n`) because the store turns a dot into a
+        dash, and `foo.2` would land on an existing `foo-2`."""
+        taken = self.store.slug_set()
+        if _store_slug(slug) not in taken:
+            return slug
+        n = 2
+        while _store_slug(f"{slug}-{n}") in taken:
+            n += 1
+        _log(f"      · {slug} already exists in the store; staged as {slug}-{n}")
+        return f"{slug}-{n}"
 
     # ── the gate's mark ──────────────────────────────────────────────────
     #
@@ -916,6 +996,10 @@ class Distiller:
         kind = re.search(r"kind:\s*(\w+)", raw)
         head, add = _split_draft(body)
         title = ""
+        if head.get("EXTENDS") and self.extend_mode == "continue":
+            return {"ok": False,
+                    "why": f"extend_mode is \"continue\": an EXTENDS draft would rewrite "
+                           f"{head['EXTENDS']}, so it is not poured"}
         # Curation lines were inside the signed text, so they are the distiller's own.
         # A TAGS line that does not parse here was not written by stage() — refuse
         # rather than pour a memory with a frontmatter nobody can read.
@@ -936,6 +1020,10 @@ class Distiller:
             new_body = m.group(1).rstrip() + "\n\n" + add
         else:
             slug_out = slug
+            if self.extend_mode == "continue" and _store_slug(slug) in self.store.slug_set():
+                return {"ok": False,
+                        "why": f"a memory named {_store_slug(slug)} already exists; a "
+                               "new-memory draft never overwrites one"}
             desc = head.get("DESC") or slug
             title = head.get("TITLE", "")
             new_body = add
@@ -994,8 +1082,10 @@ class Distiller:
     # and is not read here: "the model proposed it" is not "the human said it", and
     # treating the gate's correct refusal as evidence resurrected exactly what the
     # gate threw away. The only trigger is `find_transition`: ONE surviving [USER]
-    # quote that retires a memory this store holds AND names this new one as its
-    # successor. `Store.retire` runs the same relation again; nothing here is trusted.
+    # quote whose text contains an exact whole-line match of the closed template
+    # (`distill/transition.py`) naming a memory this store holds AND this new one as
+    # its successor — free text, however plausible, proves nothing (round A′,
+    # 2026-09-19). `Store.retire` runs the same relation again; nothing here is trusted.
     def _retirement_target(self, man: dict, new_slug: str) -> dict | None:
         """The proof that a [USER] quote in this manifest retires an existing memory
         in favour of `new_slug`, or None.
@@ -1013,7 +1103,7 @@ class Distiller:
                         if sl != new_slug), reverse=True)
         for _, sl in cands:
             r = transition.find_transition(quotes, {"slug": sl, "title": titles.get(sl, "")},
-                                           new)
+                                           new, known=self.store.slug_set())
             if r and r["kind"] == "superseded":
                 return r
         return None
@@ -1050,8 +1140,15 @@ class Distiller:
         if not (out or "").strip():
             return {"slug": slug, "verdict": "SKIP", "judged_sha": judged_sha,
                     "why": "the scribe was unreachable or answered nothing — not a verdict"}
-        first = (out.splitlines() or [""])[0].upper()
-        v = next((x for x in ("POUR", "FIX", "TOSS") if x in first), None)
+        # The verdict word may trail a stray preamble line; look at the first three
+        # non-empty lines. No verdict word at all is "the scribe did not keep the
+        # shape" — and that is NOT a verdict: a SKIP keeps the gate-passed draft for
+        # the next tick instead of deleting it (38 drafts were lost this way).
+        heads = [l.upper() for l in out.splitlines() if l.strip()][:3]
+        v = next((x for l in heads for x in ("POUR", "FIX", "TOSS") if re.search(rf"\b{x}\b", l)), None)
+        if v is None:
+            return {"slug": slug, "verdict": "SKIP", "judged_sha": judged_sha,
+                    "why": "the scribe did not keep the shape (no POUR/FIX/TOSS in the first lines) — not a verdict"}
         rm = re.search(r"^reason[:：]\s*(.+)$", out, re.M | re.I) if v else None
         why = rm.group(1) if rm else ""
         m = re.search(r"^BODY:\s*\n(.*)$", out, re.S | re.M)
@@ -1473,7 +1570,7 @@ class Distiller:
                                        ensure_ascii=False) + "\n")
                 continue
             if verdict == "EXTENDS":
-                c = {**c, "extends": target, "extends_why": why}
+                c = self._route_extends(c, target, why)
             self.sprout(c)
             to_write.append((c, near))
 

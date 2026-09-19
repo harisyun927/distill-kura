@@ -40,8 +40,11 @@ def a_manifest(store: Store, quotes: list[dict]) -> str:
 
 
 def user_manifest(store: Store) -> str:
+    # The closed template (round A′, 2026-09-19) is the only sentence shape that
+    # proves `superseded` any more; free text like "stop using X, now use Y" no
+    # longer opens this door (see tests/test_transition.py).
     return a_manifest(store, [{"class": "USER",
-                               "text": "stop using old-way, now use new-way"}])
+                               "text": "old-way はやめて、new-way に統合する。"}])
 
 
 def hook_of(store: Store, slug: str) -> str:
@@ -71,17 +74,18 @@ def test_the_face_is_written_in_the_script_of_the_old_trigger(tmp_path):
     s.init_files()
     s.remember("k3-plan", "K3をSSD階層で走らせる計画。純CPUで10 tok/sを狙う", "本文")
     s.remember("k3-new", "新しい計画", "本文")
-    h = a_manifest(s, [{"class": "USER", "text": "k3-plan はやめて、今後は k3-new で行く"}])
+    h = a_manifest(s, [{"class": "USER", "text": "k3-plan はやめて、k3-new に統合する。"}])
     assert s.retire("k3-plan", "k3-new", h)["ok"]
     hook = hook_of(s, "k3-plan")
     assert hook.startswith("退役: ") and "／現在は [[k3-new]]" in hook
 
 
-def test_a_user_quote_naming_the_old_title_is_enough(tmp_path):
-    """The human says the memory's NAME, not its slug — the way people talk."""
+def test_a_user_quote_naming_the_old_slug_is_enough(tmp_path):
+    """Round A′ (2026-09-19): the closed template reads EXACT SLUGS only, never a
+    title, so this is no longer "naming the memory the way people talk" — it is the
+    template, spelled with the store's own slug either side."""
     s = a_store(tmp_path)
-    title = next(t for t, sl in s.titles().items() if sl == "old-way")
-    h = a_manifest(s, [{"class": "USER", "text": f"instead of {title} we now use new-way"}])
+    h = a_manifest(s, [{"class": "USER", "text": "old-way はやめて、new-way に統合する。"}])
     assert s.retire("old-way", "new-way", h)["ok"]
 
 
@@ -184,7 +188,7 @@ def test_a_second_different_successor_is_refused(tmp_path):
     s.remember("third-way", "a later idea", "BODY")
     h = user_manifest(s)
     assert s.retire("old-way", "new-way", h)["ok"]
-    h2 = a_manifest(s, [{"class": "USER", "text": "we replaced old-way with third-way"}])
+    h2 = a_manifest(s, [{"class": "USER", "text": "old-way はやめて、third-way に統合する。"}])
     r = s.retire("old-way", "third-way", h2)
     assert not r["ok"] and "already wears" in r["error"]
     assert "[[new-way]]" in hook_of(s, "old-way")
@@ -233,7 +237,7 @@ def a_long_faced_store(tmp_path):
                "K3をSSD階層で走らせる計画。純CPUで10 tok/sを狙う。作戦帳はCAMPAIGN.mdに置き、"
                "職人はDSH-Qwenが担当し、監督は雲のユキが受け持つ長い長い説明の行", "本文")
     s.remember("k3-new", "新しい計画", "本文")
-    h = a_manifest(s, [{"class": "USER", "text": "k3-plan はやめて、今後は k3-new で行く"}])
+    h = a_manifest(s, [{"class": "USER", "text": "k3-plan はやめて、k3-new に統合する。"}])
     assert s.retire("k3-plan", "k3-new", h)["ok"]
     _aged(s, "k3-plan")
     return s
@@ -319,7 +323,7 @@ def test_the_distiller_retires_on_the_humans_own_words(tmp_path):
     s = a_store(tmp_path, policy="distiller-only")
     dis = a_distiller(tmp_path, s)
     r = stage_and_pour(tmp_path, dis,
-                       [{"class": "USER", "text": "stop using old-way — switch to newer-way"}],
+                       [{"class": "USER", "text": "old-way はやめて、newer-way に統合する。"}],
                        ["USER"])
     assert r["ok"] and r["retired"] == "old-way"
     assert Store.is_faced(hook_of(s, "old-way")) and "[[newer-way]]" in hook_of(s, "old-way")
@@ -395,7 +399,7 @@ def test_the_distiller_retires_on_an_explicit_japanese_sentence(tmp_path):
     s = a_store(tmp_path, policy="distiller-only")
     dis = a_distiller(tmp_path, s)
     r = stage_and_pour(tmp_path, dis,
-                       [{"class": "USER", "text": "old-way はやめて、今後は newer-way で行く"}],
+                       [{"class": "USER", "text": "old-way はやめて、newer-way に統合する。"}],
                        ["USER"])
     assert r["ok"] and r["retired"] == "old-way"
     assert "／現在は [[newer-way]]" in hook_of(s, "old-way") or \
@@ -435,7 +439,7 @@ def test_the_drain_counts_the_transition_in_its_metrics_row(tmp_path):
     dis.stage({"slug": "newer-way", "kind": "project", "title": "the newer way",
                "description": "what we do instead now", "body": "BODY",
                "evidence": [{"class": "USER",
-                             "text": "stop using old-way — switch to newer-way"}],
+                             "text": "old-way はやめて、newer-way に統合する。"}],
                "classes": ["USER"], "tags": [], "tag_basis": {},
                "tags_refused": {"superseded": "reserved for the forgetting pass"}},
               str(src))
