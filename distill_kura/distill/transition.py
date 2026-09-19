@@ -91,22 +91,32 @@ _RETIREMENT = [
 # and both names and says the OPPOSITE of old → new. Each entry is (construction name,
 # pattern with `{old}` / `{new}` slots); a match means that construction, in this
 # quote, puts the wrong memory in its marked slot, and it no longer counts as proof.
+#
+# The slot is as loose as the forward pattern it mirrors: `replace … with` spans a gap,
+# so `replace the new-way with old-way` must be caught with the same gap, not by
+# demanding the name right after the marker. A Japanese slot may carry a short filler
+# (`old-way の方に統合`) but not a particle that starts a new noun (は・が・を) or a
+# comma; an English slot may carry determiners and modifiers up to the next
+# punctuation. Too loose only withholds proof — the safe direction — never grants it.
+_JGAP = r"[^はがを、。\n]{0,12}"
+_EGAP = r"[^.,;:\n]{0,40}?"
 _REVERSED = [
-    ("やめて…で行く", r"{old}\s*(?:で|に)(?:行く|いく|する)"),
-    ("に代えて", r"{new}\s*に代えて"),
-    ("代わりに", r"{new}\s*の?代わりに"),
-    ("今後は", r"今後は\s*{old}"),
-    ("に変更", r"{old}\s*に(?:変更|変え)"),
-    ("に置き換え", r"{old}\s*に置(?:き)?換え"),
+    ("やめて…で行く", rf"{{old}}{_JGAP}(?:で|に)(?:行く|いく|する)"),
+    ("に代えて", rf"{{new}}{_JGAP}に代えて"),
+    ("代わりに", rf"{{new}}{_JGAP}代わりに"),
+    ("今後は", rf"今後は{_JGAP}{{old}}"),
+    ("に変更", rf"{{old}}{_JGAP}に(?:変更|変え)"),
+    ("に置き換え", rf"{{old}}{_JGAP}に置(?:き)?換え"),
     ("→", r"{new}\s*→\s*{old}"),
-    ("から…へ", r"{new}\s*から"),
-    ("instead of", r"\binstead of\s+{new}"),
-    ("instead", r"{old}\s+instead\b"),
-    ("replace … with", r"\breplac(?:e|ed|es|ing)\s+{new}\b"),
-    ("switch to", r"\bswitch(?:ed|es|ing)?\s+to\s+{old}"),
-    ("now use", r"\bnow\s+(?:use|using|we use|we're using)\s+{old}"),
-    ("superseded by", r"\bsuperseded by\s+{old}"),
-    ("に統合", r"{old}\s*に統合"),
+    ("から…へ", rf"{{new}}{_JGAP}から"),
+    ("instead of", rf"\binstead of\s+{_EGAP}{{new}}"),
+    ("instead", rf"{{old}}\s+{_EGAP}\binstead\b"),
+    ("replace … with", rf"\breplac(?:e|ed|es|ing)\s+(?:(?!\bwith\b)[^.,;:\n]){{0,60}}?"
+                       rf"{{new}}\b(?:(?!\bwith\b)[^.,;:\n]){{0,60}}?\bwith\b"),
+    ("switch to", rf"\bswitch(?:ed|es|ing)?\s+to\s+{_EGAP}{{old}}"),
+    ("now use", rf"\bnow\s+(?:use|using|we use|we're using)\s+{_EGAP}{{old}}"),
+    ("superseded by", rf"\bsuperseded by\s+{_EGAP}{{old}}"),
+    ("に統合", rf"{{old}}{_JGAP}に統合"),
 ]
 
 # A clause that changes the subject can never supply the successor.
@@ -191,7 +201,9 @@ def _name_pat(slug: str, title: str) -> str:
 def _reversed(name: str, text: str, old_pat: str, new_pat: str) -> bool:
     """Does construction `name`, in this quote, put the wrong memory in its marked slot?"""
     for n, pat in _REVERSED:
-        if n == name and re.search(pat.format(old=old_pat, new=new_pat), text):
+        # str.replace, not str.format: the patterns carry `{0,12}` quantifiers.
+        pat = pat.replace("{old}", old_pat).replace("{new}", new_pat)
+        if n == name and re.search(pat, text):
             return True
     return False
 

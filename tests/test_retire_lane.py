@@ -606,3 +606,44 @@ def test_a_construction_with_the_wrong_memory_in_its_marked_slot_proves_nothing(
     # contradicted by it.
     assert pairs(proven(user("old-way は退役して、new-way に統合する。"), TITLES)) \
         == [("old-way", "new-way")]
+
+
+# ── round 8 (the fourth confirmation review) ────────────────────────────────
+
+
+def test_a_filler_before_the_reversed_slot_does_not_restore_the_proof():
+    """(review) The forward `replace … with` spans a gap, but its reversed twin wanted
+    the name right after `replace`, so `replace the new-way with old-way` matched
+    forward, missed reversed, and proved old → new. A reversed slot is now as loose
+    as the forward pattern it mirrors: English up to the next punctuation, Japanese a
+    short filler that is not a new-noun particle (は・が・を) or a comma."""
+    from distill_kura.distill.transition import find_transition
+
+    old = {"slug": "old-way", "title": TITLES["old-way"]}
+    new = {"slug": "new-way", "title": TITLES["new-way"]}
+
+    def rel(text):
+        return find_transition([{"class": "USER", "text": text}], old, new)
+
+    for backwards in ("replace the new-way with old-way",
+                      "replace our shiny new-way with the old-way",
+                      "instead of the new-way, use old-way",
+                      "switch to the old-way; retire new-way",
+                      "we now use the old-way, drop new-way",
+                      "new-way is superseded by the old-way",
+                      "the old-way instead, new-way is retired",
+                      "new-way は old-way の方に統合する。",
+                      "new-way は old-way のほうに置き換える。",
+                      "今後は old-way のままで行く。new-way はやめる",
+                      "new-way の記録から old-way へ移す"):
+        r = rel(backwards)
+        assert r is None or r["kind"] != "superseded", backwards
+
+    # A filler the other way round still proves old → new — the loose slot does not
+    # match the RIGHT name in the wrong place.
+    for forwards in ("replace the old-way with the new-way",
+                     "instead of the old-way, use the new-way",
+                     "switch to the new-way; retire old-way",
+                     "old-way は new-way の方に統合する。"):
+        r = rel(forwards)
+        assert r is not None and r["kind"] == "superseded", forwards
