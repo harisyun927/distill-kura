@@ -76,13 +76,17 @@ a superseded memory's index line (docs/DESIGN.md §8). There is no direct varian
 It requires an evidence manifest that verifies against its own hash and carries a
 USER-class quote naming the old memory, so a tool call cannot reach it under any
 `write_policy`, and `frozen` refuses it like everything else. Naming the old memory is
-the floor, not the proof: the same manifest must also carry ONE [USER] quote in which
-the human retires that memory AND names this successor — proposed ≠ proven, and a model
-proposing a `superseded` tag (or the gate refusing it) counts for nothing. Only the
-human's explicit old → new sentence writes `現在は [[new]]`; anything less is refused
-with "no explicit succession in the human's words". The door re-proves this itself
-rather than trusting the distiller that knocked. Many false negatives at first are
-acceptable; a wrong successor in canonical is not. Its limit is the gate
+the floor, not the proof: the same manifest must also carry a [USER] quote whose text
+contains an exact, whole-line match of the one closed template
+(`distill/transition.py`'s `TEMPLATE` / `parse_instruction`, the same grammar
+`distill/retire_lane.py` matches) naming exactly this old → new pair — proposed ≠
+proven, and a model proposing a `superseded` tag (or the gate refusing it) counts for
+nothing, and neither does any other phrasing of the same idea in free text (six review
+rounds tried to make free text carry this proof; round A′, 2026-09-19, closed that door
+for good). Only the human's exact-template sentence writes `現在は [[new]]`; anything
+less is refused with "no explicit succession in the human's words". The door re-proves
+this itself rather than trusting the distiller that knocked. Many false negatives at
+first are acceptable; a wrong successor in canonical is not. Its limit is the gate
 mark's limit: the manifests sit beside the memories, so this stops a tool with a file
 handle, not a principal with the filesystem.
 

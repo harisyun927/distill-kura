@@ -5,72 +5,102 @@ trigger it is a human saying, in one breath, that the old thing is over AND what
 takes its place. A model PROPOSING `superseded` proves nothing; the gate refusing
 that proposal proves nothing either. Proposed ≠ proven.
 
+Six review rounds tried to read that proof out of ordinary conversation — free text,
+scored by construction tables, slot markers and nearest-name heuristics — and each
+round's fix was defeated by a new phrasing the next round found. The holes were never
+in any one implementation; they were in the METHOD: free text does not carry enough
+structure for a machine to recover "this sentence authorises a write" from word order
+and position alone, no matter how many patches are layered on the reading.
+
+So this module (2026-09-19, round "A′") stops reading free text for authorisation.
+`superseded` may only come from an EXACT, whole-line match of one closed template —
+the same template `distill_kura/distill/retire_lane.py` already carries, now defined
+here once and imported by that lane so there is a single spec, not two copies drifting
+apart:
+
+    <old-slug> は [one reason sentence naming no candidate slug、ending in
+    役目終わり。](optional) (退役して|やめて)、<new-slug> (に置き換える|に統合する)[。]
+
+Conversation language ≠ authorisation language. Everything that is not this template —
+however plausible, however explicit it reads to a person — proves nothing here. A
+free-text proposal is not a lesser form of proof; it is not proof at all, of either
+direction. This is a whitelist grammar: it fails closed. Names are exact slugs only —
+no titles, no paraphrase, no word overlap — for `superseded`.
+
+A quote that uses one of the loose retirement verbs (`やめる`, `廃止`, `stop`, `退役`,
+…) without matching the template is a `retired-only` result: reference information
+that the old thing was said to be over, nothing more. It is never proof of a
+successor, and no caller may write a face for it — it exists only so a caller can say
+WHY it stayed silent. Free text can never grant a write; only the closed template
+can.
+
 Pure and model-free on purpose: this is the same relation for the pipeline (which
 decides whether to knock) and for `Store.retire` (which must not trust its caller).
-
-The three things ONE [USER] quote must carry, all of them, none stitched together
-from two quotes:
-  (i)   the OLD memory, by exact slug or exact index title;
-  (ii)  an explicit replacement/retirement construction — the sentence has to SAY the
-        change, not merely mention both names;
-  (iii) the NEW memory, in the SAME quote: exact slug, exact title, or ≥2 whole words
-        of its title/topic.
-A topic-shift clause ("ところで…", "by the way …") is cut off before (ii) and (iii)
-are looked for, so "old-way はやめよう。ところで GPU 温度を測ろう" can never make the
-GPU memory the successor of old-way.
-
-A quote that only retires — `やめる`, `廃止`, `stop`, `退役` — is a `retired-only`
-result even when the new memory is mentioned somewhere in it: retirement is proven,
-succession is NOT, because no construction connected the two names. No caller writes a
-face for it (a face without a successor is not implemented); it is returned so the
-callers can say WHY they stayed silent.
 """
 from __future__ import annotations
 
 import re
 import unicodedata
 
-# ── the constructions that SAY a change, per language ───────────────────────
-# Each is (name, pattern). The name is the receipt: what the human's sentence was
-# read as. `…` in a construction is a gap the pattern spans loosely.
+# ── the one closed template — the ONLY thing that proves `old` → `new` ──────────────
+#
+# Matched against the WHOLE line (`re.match` anchored at `^`, ending in `$`), not a
+# fragment of it. Space (half- or full-width; NFKC folds the latter to the former in
+# `_norm`) may sit between a name and its particle, and nowhere else the pattern does
+# not already allow for.
+#
+# `<old-slug>` and `<new-slug>` are read only as raw slug-shaped tokens here — whether
+# they are actually known slugs in a given store, and whether the optional reason
+# clause names some THIRD candidate, is candidate-set logic that belongs to the
+# caller (`retire_lane.py`'s `_match_template`), not to this pure relation.
+_WS = r" *"
+_SLUG = r"[0-9a-z_\-]+"
+# The middle sentence carries a reason and NOTHING else: no subject/topic/object marker
+# and no comma, so a clause naming a THIRD thing (in a different voice) cannot slip
+# through as "just the reason". It must end in the one fixed phrase 役目終わり, right
+# before the sentence's own 。.
+_REASON = r"[^はがを、\n。]*役目終わり"
+TEMPLATE = re.compile(
+    rf"^(?P<old>{_SLUG}){_WS}は{_WS}"
+    rf"(?:(?P<reason>{_REASON})。{_WS})?"
+    rf"(?:退役して|やめて)、{_WS}"
+    rf"(?P<new>{_SLUG}){_WS}"
+    rf"(?:に置き換える|に統合する)"
+    rf"。?$"
+)
 
-# What may follow an affirmative verb form for it to count: the end of the clause —
-# punctuation, whitespace (what `_clauses` turns sentence enders into) or the end of
-# the text. Anything else (`…たくない`, `…するべきではない`, `…してはいけない`) is a
-# continuation that can negate, forbid or merely wish, and is not a ruling.
-_END = r"(?=[\s、,。．.!?！？]|$)"
 
-_REPLACEMENT = [
-    ("やめて…で行く", r"やめ(?:て|で)[^。\n]{0,40}?(?:で|に)(?:行く|いく|する)"),
-    ("に代えて", r"に代えて"),
-    ("代わりに", r"代わりに"),
-    ("今後は", r"今後は"),
-    ("に変更", r"に(?:変更|変え)"),
-    ("に置き換え", r"に置(?:き)?換え"),
-    ("→", r"→"),
-    ("から…へ", r"から[^。\n]{0,40}?へ(?:移|切|変|$|[^\w])"),
-    ("instead of", r"\binstead of\b"),
-    ("instead", r"\binstead\b(?! of)"),
-    ("replace … with", r"\breplac(?:e|ed|es|ing)\b[^.\n]{0,60}?\bwith\b"),
-    ("switch to", r"\bswitch(?:ed|es|ing)?\s+to\b"),
-    ("now use", r"\bnow\s+(?:use|using|we use|we're using)\b"),
-    ("superseded by", r"\bsuperseded by\b"),
-    # Round 4's closed template in retire_lane.py carries these two as its own fixed
-    # verb slots (退役して / に統合する). `Store.retire` re-runs this table as an
-    # independent, nondirectional sanity receipt on whatever the template already
-    # decided, so the receipt has to recognise the same vocabulary the template does —
-    # otherwise every retirement using these forms would come back `kind: None` (an
-    # expected gap, not a disagreement) instead of confirming what the template found.
-    # The inflection is REQUIRED, positive, and must END the clause: with it optional,
-    # the bare prefix `に統合` matched inside `に統合しない`; with only the next character
-    # excluded, `に統合した` matched inside `に統合したくない` and `に統合する` inside
-    # `に統合するべきではない`. Only the closed forms the template itself writes —
-    # `に統合する` followed by punctuation, whitespace or the end — count; `_clauses`
-    # has already turned sentence enders into spaces.
-    ("に統合", rf"に統合(?:する|した|します){_END}"),
-]
+def _norm(s: str) -> str:
+    return unicodedata.normalize("NFKC", str(s or "")).lower()
 
-# Retirement without a successor: proves the old thing is over, nothing more.
+
+def parse_instruction(line: str) -> tuple[str, str] | None:
+    """The (old, new) slugs ONE line proves under the closed template, or None.
+
+    `line` is NFKC-normalised and lower-cased here (idempotent if the caller already
+    did it). The match is whole-line-anchored: a valid-looking fragment inside a
+    longer line is not a ruling, and multiple template lines in one quote each stand
+    on their own (call this once per physical line).
+
+    This is the raw grammar only — no candidate-set check, no reason-clause-names-a-
+    third-memory check. A caller that has a store's own slug set (`retire_lane.py`)
+    matches `TEMPLATE` directly so it can also read `reason` and validate both names
+    against that set; this wrapper is for callers (like `find_transition`, below)
+    that only need to know whether a line proves a SPECIFIC (old, new) pair they
+    already have in hand.
+    """
+    m = TEMPLATE.match(_norm(line))
+    if not m:
+        return None
+    return m.group("old"), m.group("new")
+
+
+# ── retired-only: reference information, never proof of a successor ─────────────────
+# A quote that only retires — `やめる`, `廃止`, `stop`, `退役` — is informational: the
+# human said the old thing is over, and that much free text CAN carry, because nothing
+# downstream of it treats "retired" as license to point at any particular successor.
+# It is returned only so a caller can explain why it stayed silent about a successor,
+# never to write anything.
 _RETIREMENT = [
     ("やめる", r"やめ(?:る|た|よう|ます|る事|ること)?"),
     ("廃止", r"廃止|廃す|打ち切"),
@@ -78,68 +108,20 @@ _RETIREMENT = [
     ("drop", r"\bdrop(?:ped|ping|s)?\b"),
     ("retire", r"\bretir(?:e|ed|es|ing)\b"),
     ("done with", r"\bdone with\b"),
-    # See the comment on "に統合" above: this is the template's other fixed verb slot,
-    # and it has the same rule — a full positive inflection that ends the clause, never
-    # the bare prefix (`退役しない` / `退役してはいけない` are not retirements).
-    ("退役", rf"退役(?:して|した|する|します){_END}"),
+    # The same fixed verb slot the closed template's front side carries. A full
+    # positive inflection that ends the clause, never the bare prefix (`退役しない` /
+    # `退役してはいけない` are not retirements). `_END` below turns a clause ender into
+    # a lookahead so a continuation cannot be mistaken for a ruling.
+    ("退役", r"退役(?:して|した|する|します)(?=[\s、,。．.!?！？]|$)"),
 ]
 
-# ── a construction read backwards ───────────────────────────────────────────
-# Most constructions mark ONE of the two slots: `X に統合する` says X is the
-# destination, `replace X with Y` says X is what goes. Finding the marker somewhere
-# beside both names is not enough — `new-way は old-way に統合する` carries `に統合`
-# and both names and says the OPPOSITE of old → new.
-#
-# Not a gap pattern. Three versions tried to describe what may sit between the name and
-# the marker — a fixed width, a filler that stops at a particle, a filler that stops at
-# punctuation — and each was a rule a longer or differently-shaped modifier walked past
-# (`new-wayを基盤とする方式に代えて old-wayを使う`: the を inside the modifier ended
-# the filler). The slot is read the other way round: of the two names, WHICHEVER STANDS
-# NEAREST the marker on its marked side is the one in that slot, however much sits
-# between. Each entry is (construction, marker, side, the memory that belongs there).
-# `→` has two marked sides and two entries. A quote where the nearest name on the
-# marked side is the wrong one says the reverse, and that construction no longer counts.
-# Too strict only withholds proof — the safe direction — never grants it.
-_SLOTS = [
-    ("やめて…で行く", r"(?:で|に)(?:行く|いく|する)", "before", "new"),
-    ("に代えて", r"に代えて", "before", "old"),
-    ("代わりに", r"代わりに", "before", "old"),
-    ("今後は", r"今後は", "after", "new"),
-    ("に変更", r"に(?:変更|変え)", "before", "new"),
-    ("に置き換え", r"に置(?:き)?換え", "before", "new"),
-    ("→", r"→", "before", "old"),
-    ("→", r"→", "after", "new"),
-    ("から…へ", r"から", "before", "old"),
-    ("instead of", r"\binstead of\b", "after", "old"),
-    ("instead", r"\binstead\b(?! of)", "before", "new"),
-    # Active `replace X with Y` marks X (after the verb) as what goes; passive `X is
-    # replaced with Y` marks X (before the verb) as what goes and Y (after `with`) as
-    # what comes. The active entry must not fire on a passive's `replaced`, so it
-    # refuses a preceding be-verb (fixed-width lookbehinds: `re` allows no other kind).
-    ("replace … with", r"(?<!\bis )(?<!\bare )(?<!\bwas )(?<!\bwere )(?<!\bbe )"
-                       r"(?<!\bbeen )(?<!\bbeing )(?<!\bgets )(?<!\bgot )"
-                       r"\breplac(?:e|ed|es|ing)\b", "after", "old"),
-    ("replace … with", r"\b(?:is|are|was|were|be|been|being|gets|got)\s+replaced\b",
-                       "before", "old"),
-    ("replace … with", r"\b(?:is|are|was|were|be|been|being|gets|got)\s+replaced\s+with\b",
-                       "after", "new"),
-    ("switch to", r"\bswitch(?:ed|es|ing)?\s+to\b", "after", "new"),
-    ("now use", r"\bnow\s+(?:use|using|we use|we're using)\b", "after", "new"),
-    ("superseded by", r"\bsuperseded by\b", "after", "new"),
-    ("に統合", r"に統合", "before", "new"),
-]
-
-# A clause that changes the subject can never supply the successor.
+# A clause that changes the subject can never supply context for `retired-only`
+# either: "old-way はやめよう。ところで GPU 温度を測ろう" must never make the GPU
+# memory look connected to old-way, even as informational text.
 _SHIFT = re.compile(r"(ところで|別件|余談|それはそうと|by the way|anyway|"
                     r"on another note|unrelated)", re.I)
 
 _SENT = re.compile(r"[。．.!?！？\n]")
-_WORD = re.compile(r"[0-9A-Za-z_\-]+|[぀-ヿ㐀-鿿]+")
-_ASCII = re.compile(r"^[0-9A-Za-z_\-]+$")
-
-
-def _norm(s: str) -> str:
-    return unicodedata.normalize("NFKC", str(s or "")).lower()
 
 
 def _clauses(text: str) -> str:
@@ -149,13 +131,12 @@ def _clauses(text: str) -> str:
         if _SHIFT.search(part):
             break
         keep.append(part)
-    # Joined with a newline, not a space, so the sentence boundary survives: every gap
-    # in the tables already stops at `\n`, and `_nearest` must not reach across it.
     return "\n".join(keep)
 
 
 def _names(text: str, *candidates: str) -> str | None:
     """The first candidate that appears in `text` as a whole name (already NFKC-low)."""
+    _ASCII = re.compile(r"^[0-9A-Za-z_\-]+$")
     for c in candidates:
         c = _norm(c).strip()
         if not c:
@@ -167,131 +148,53 @@ def _names(text: str, *candidates: str) -> str | None:
     return None
 
 
-# Words that fit any title in any store: two of them are not a name.
-_STOP = {"the", "a", "an", "of", "for", "and", "or", "to", "in", "on", "with", "that",
-         "this", "it", "its", "is", "was", "are", "we", "our", "you", "how", "what",
-         "から", "こと", "もの", "ため", "する", "した", "など", "よう"}
-
-
-def _words(*sources: str) -> list[str]:
-    """The words a title/topic contributes, deduped, order kept. Filler is dropped:
-    "the" + "new" from "the new way" must not stand in for naming a memory."""
-    out: list[str] = []
-    for s in sources:
-        for w in _WORD.findall(_norm(s)):
-            if len(w) >= 2 and w not in _STOP and w not in out:
-                out.append(w)
-    return out
-
-
-def _word_hits(text: str, words: list[str]) -> list[str]:
-    hits = []
-    for w in words:
-        pat = (rf"(?<![0-9A-Za-z_\-]){re.escape(w)}(?![0-9A-Za-z_\-])"
-               if _ASCII.match(w) else re.escape(w))
-        if re.search(pat, text):
-            hits.append(w)
-    return hits
-
-
 def _matched(text: str, table) -> list[str]:
     return [name for name, pat in table if re.search(pat, text)]
-
-
-def _name_pat(slug: str, title: str) -> str:
-    """A pattern for one memory by either of its names (already NFKC-lowered), with the
-    same whole-name rule `_names` applies."""
-    alts = []
-    for c in (slug, title):
-        c = _norm(c).strip()
-        if c:
-            alts.append(rf"(?<![0-9A-Za-z_\-]){re.escape(c)}(?![0-9A-Za-z_\-])"
-                        if _ASCII.match(c) else re.escape(c))
-    return "(?:" + "|".join(alts) + ")"
-
-
-def _nearest(text: str, pos: int, side: str, old_pat: str, new_pat: str) -> str | None:
-    """Which memory — "old" or "new" — stands nearest to `pos` on `side`, within the
-    same sentence, or None if neither is named there at all. `old-way と new-way。
-    手順書は 台帳に統合する。` names both memories, but not in the sentence that
-    carries the construction, and that sentence is about something else."""
-    lo = text.rfind("\n", 0, pos) + 1
-    hi = text.find("\n", pos)
-    hi = len(text) if hi < 0 else hi
-    best: tuple[int, str] | None = None
-    for who, pat in (("old", old_pat), ("new", new_pat)):
-        for m in re.finditer(pat, text):
-            if side == "before" and lo <= m.start() and m.end() <= pos:
-                d = pos - m.end()
-            elif side == "after" and pos <= m.start() and m.end() <= hi:
-                d = m.start() - pos
-            else:
-                continue
-            if best is None or d < best[0]:
-                best = (d, who)
-    return best[1] if best else None
-
-
-def _reversed(name: str, text: str, old_pat: str, new_pat: str) -> bool:
-    """Does construction `name`, in this quote, put the wrong memory in its marked slot?"""
-    for n, marker, side, expect in _SLOTS:
-        if n != name:
-            continue
-        for m in re.finditer(marker, text):
-            pos = m.start() if side == "before" else m.end()
-            # The slot must HOLD the expected memory, not merely lack the wrong one:
-            # `old-way and new-way. switch to a plan.` names nothing after `switch
-            # to`, and a construction whose marked slot is empty of both memories is
-            # about something else — it must not borrow two names mentioned earlier.
-            if _nearest(text, pos, side, old_pat, new_pat) != expect:
-                return True
-    return False
 
 
 def find_transition(evidence: list[dict], old: dict, new: dict) -> dict | None:
     """Did ONE [USER] quote prove `old` → `new`?
 
-    → `{"kind": "superseded", ...}` when all three halves are in one quote,
-      `{"kind": "retired-only", ...}` when the human retired the old thing but named
-      no successor, and None when nothing was proven. The quote and the matched
-      constructions come back as the receipt: what sentence, read how.
+    → `{"kind": "superseded", ...}` when some physical line of a [USER] quote is an
+      exact whole-line match of the closed template naming exactly this (old, new)
+      pair — the only route to proof;
+      `{"kind": "retired-only", ...}` when the human said the old thing is over (loose
+      retirement vocabulary) but no line proved a successor — reference information,
+      never proof, and never written anywhere;
+      None when nothing was said about the old memory at all, or nothing was proven
+      and nothing informational was said either.
+
+    Conversation language ≠ authorisation language: a proposal, a paraphrase, an
+    arrow, an "instead of" — none of it counts, however plausible it reads. Only the
+    closed template (`TEMPLATE` / `parse_instruction`, above) can produce
+    `superseded`.
     """
     old_slug, old_title = str(old.get("slug") or ""), str(old.get("title") or "")
     new_slug, new_title = str(new.get("slug") or ""), str(new.get("title") or "")
-    new_topic = str(new.get("topic") or "")
-    if not old_slug or not new_slug or old_slug == new_slug:
+    old_norm, new_norm = _norm(old_slug).strip(), _norm(new_slug).strip()
+    if not old_norm or not new_norm or old_norm == new_norm:
         return None
-    new_words = _words(new_title, new_topic)
-    old_pat, new_pat = _name_pat(old_slug, old_title), _name_pat(new_slug, new_title)
     retired_only = None
     for q in (evidence or []):
         if not isinstance(q, dict) or q.get("class") != "USER":
             continue
         whole = _norm(q.get("text"))
         if not _names(whole, old_slug, old_title):
-            continue                       # (i) — the old memory, by name
-        text = _clauses(whole)             # a "ところで" clause is not the human's ruling
+            continue                       # nothing here even mentions the old memory
+        # (superseded) — each physical line stands on its own; a template spanning
+        # a newline, or sharing a line with other prose, is not a whole-line match.
+        for line in whole.splitlines():
+            hit = parse_instruction(line)
+            if hit == (old_norm, new_norm):
+                return {"kind": "superseded", "old": old_slug, "new": new_slug,
+                        "quote": str(q.get("text") or ""),
+                        "constructions": ["閉じた型: 退役して/に置き換える"]}
+        # (retired-only) — informational only; a "ところで" clause is cut first so an
+        # unrelated later sentence can never be mistaken for context.
+        text = _clauses(whole)
         if not _names(text, old_slug, old_title):
             continue
-        # A construction whose marked slot holds the WRONG memory (`new-way は
-        # old-way に統合する`) says the reverse and is not proof of old → new.
-        repl = [n for n in _matched(text, _REPLACEMENT)
-                if not _reversed(n, text, old_pat, new_pat)]
         retire = _matched(text, _RETIREMENT)
-        if not (repl or retire):
-            continue                       # (ii) — the sentence must SAY the change
-        named = _names(text, new_slug, new_title)
-        hits = _word_hits(text, new_words)
-        # (iii) — and name the successor in it. Only a REPLACEMENT construction can
-        # connect the two names: a retirement verb beside a mention of the new memory
-        # (`old-way は退役した。new-way は別物。`) proves the old thing is over and
-        # nothing about what follows it. Every proven-succession form has its own
-        # entry in `_REPLACEMENT`; `_RETIREMENT` alone stops at `retired-only`.
-        if repl and (named or len(hits) >= 2):
-            return {"kind": "superseded", "old": old_slug, "new": new_slug,
-                    "quote": str(q.get("text") or ""),
-                    "constructions": repl + retire,
-                    "new_named_by": named or hits}
         if retire and retired_only is None:
             retired_only = {"kind": "retired-only", "old": old_slug, "new": None,
                             "quote": str(q.get("text") or ""),

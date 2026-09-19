@@ -49,14 +49,20 @@ was always the explicit door. A line that names two or more candidate memories w
 matching the template says so out loud (`skipped: "direction not established by the
 construction"`) rather than staying silent, so the person can go use that door.
 
-After the template decides the pair, `find_transition` is still called as an
-independent sanity receipt — the same nondirectional relation `Store.retire` re-runs on
-the manifest this lane writes. It is not a second vote on direction (`find_transition`
-never reads direction at all; see its own docstring), only a check that nothing about
-the line actively contradicts what the template found. Its own construction vocabulary
-is narrower than this template's two Japanese retirement/replacement phrasings, so it
-sometimes has nothing to add — that is expected, not a disagreement, and the template's
-own match stands on its own.
+Round A′ (2026-09-19) moved the template itself into `distill/transition.py`
+(`TEMPLATE`, `parse_instruction`) as the single source: `find_transition` now proves
+`superseded` from the SAME closed grammar this lane matches, not from free text. This
+file keeps only what is genuinely its own — the candidate-set resolution (is each
+matched token actually a slug this store holds? does the reason clause avoid naming a
+third one?), `MAX_NAMES`, and the loud-skip/silent-ordinary-talk behaviour below.
+
+After the template decides the pair, `find_transition` is still called on the manifest
+this lane writes — not as a second vote on direction (it reads no word order at all
+any more; it is the same template, applied to whichever line proves the pair) but as a
+consistency check that both sides read one spec. Since round A′ that check is no
+longer independent of the template — they are the same regex — so a mismatch here
+would mean a bug in the resolution above, not a second opinion from a different
+method.
 
 Nothing is written on a frozen store, including the lane's own watermark: the policy is
 asked before the first byte, not by `Store.retire` after the evidence file already
@@ -79,7 +85,7 @@ from datetime import datetime, timezone
 
 from ..store import FROZEN
 from .sources import call_sip, source_for
-from .transition import _norm, find_transition
+from .transition import TEMPLATE, _norm, find_transition
 from .watermark import Watermarks
 
 # A stretch naming more names than this is not an instruction, it is a list (an index
@@ -88,26 +94,6 @@ from .watermark import Watermarks
 MAX_NAMES = 8
 
 LANE_KIND = "retirement-lane"
-
-# ── the one closed template ──────────────────────────────────────────────────────────
-# Matched against the whole line, not a fragment of it. Space (half- or full-width; NFKC
-# folds the latter to the former in `_norm`) may sit between a name and its particle, and
-# nowhere else the pattern does not already allow for.
-_WS = r" *"
-_SLUG = r"[0-9a-z_\-]+"
-# The middle sentence carries a reason and NOTHING else: no subject/topic/object marker
-# and no comma, so a clause like "old-way は残すが、予備サーバーは役目終わり" (which
-# names a THIRD thing, in a different voice) cannot slip through as "just the reason".
-# It must end in the one fixed phrase 役目終わり, right before the sentence's own 。.
-_REASON = r"[^はがを、\n。]*役目終わり"
-_TEMPLATE = re.compile(
-    rf"^(?P<old>{_SLUG}){_WS}は{_WS}"
-    rf"(?:(?P<reason>{_REASON})。{_WS})?"
-    rf"(?:退役して|やめて)、{_WS}"
-    rf"(?P<new>{_SLUG}){_WS}"
-    rf"(?:に置き換える|に統合する)"
-    rf"。?$"
-)
 
 # The two verbs the template's front slot carries. A line that uses one of these AND
 # names a candidate — by slug or by title — but still fails the closed template is not
@@ -157,9 +143,15 @@ def _named_or_titled_slugs(line: str, candidates: dict[str, str]) -> list[str]:
 def _match_template(line: str, candidates: dict[str, str]) -> tuple[str, str] | None:
     """The (old, new) slugs this line's WHOLE text proves under the closed template, or
     None if it is not an exact match — a valid-looking fragment inside a longer line is
-    not the person's whole ruling."""
+    not the person's whole ruling.
+
+    `TEMPLATE` itself lives in `distill/transition.py` now (round A′, 2026-09-19) —
+    this function is the candidate-set layer on top of it: is each matched token
+    actually a slug this store holds, and does the optional reason clause avoid
+    naming some third one. That resolution is specific to this lane (it needs the
+    store's candidate set) and does not belong in the pure template match."""
     low = _norm(line)
-    m = _TEMPLATE.match(low)
+    m = TEMPLATE.match(low)
     if not m:
         return None
     by_lower = {slug.lower(): slug for slug in candidates}
@@ -176,21 +168,21 @@ def _match_template(line: str, candidates: dict[str, str]) -> tuple[str, str] | 
 
 def _accept(line: str, old: str, new: str, candidates: dict[str, str]) -> dict:
     """The template has already decided the pair; this re-runs the same relation
-    `Store.retire` re-runs on the manifest, as an independent receipt. It is not a
-    second vote on direction: `find_transition` reads no word order, only whether a
-    construction's MARKED slot (`X に統合する` — X is the destination) holds the wrong
-    memory, in which case that construction does not count.
+    `Store.retire` re-runs on the manifest, as a consistency check that both sides
+    read one spec.
 
-    Its construction vocabulary now includes `退役` and `に統合` (added alongside this
-    template so the two independent checks use the same words), but it still does not
-    cover every phrasing this template's OTHER verb slot carries (`やめて` / `に置き換
-    える` are read as `retired-only`/`に置(き)?換え` already, so this is mostly belt and
-    braces) — so `None` here can still happen and is an expected gap, not a disagreement,
-    and the template's own match stands either way. A `kind` that is neither `None` nor
-    `superseded` WOULD be a genuine
-    contradiction of what the template found, and is refused rather than kept — this
-    should not be reachable given the checks above, but silently trusting that is how a
-    bug becomes a wrong retirement.
+    Since round A′ (2026-09-19) `find_transition` proves `superseded` from the exact
+    same closed template this lane matches (`transition.TEMPLATE` /
+    `parse_instruction`) — not from free text, not from word order. So this is no
+    longer an independent second opinion by a different method: it is the same
+    grammar, re-applied to whichever physical line of `line` proves the pair, as a
+    belt-and-braces check that the resolution above (candidate-set lookup, the
+    reason-clause check) agrees with what the shared parser sees. A `kind` that is
+    neither `None` nor `superseded` WOULD be a genuine contradiction, and is refused
+    rather than kept — this should not be reachable given the checks above, but
+    silently trusting that is how a bug becomes a wrong retirement. `None` here is
+    not expected any more (the two are the same regex), but is handled the same way
+    a genuine disagreement would be, out of the same caution.
     """
     r = find_transition([{"class": "USER", "text": line}],
                         {"slug": old, "title": candidates.get(old, "")},

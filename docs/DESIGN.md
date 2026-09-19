@@ -390,20 +390,28 @@ exact index title — and that same manifest must PROVE the transition.
 
 **Proposed ≠ proven.** A model proposing a `superseded` tag is not evidence, and the
 gate's correct refusal of that proposal is not evidence either; reading the refusal as a
-signal is how a wrong successor got written into canonical. `distill/transition.py`
-`find_transition(evidence, old, new)` is the whole relation, pure and model-free: ONE
-[USER] quote must (i) name the old memory (exact slug or exact index title), (ii) carry
-an explicit replacement/retirement construction (`やめて…で行く`, `に代えて`, `代わりに`,
-`今後は`, `に変更`, `に置き換え`, `→`, `から…へ`; `instead of`, `replace … with`,
-`switch to`, `now use`, `superseded by`, `→`) and (iii) name the NEW memory in that same
-quote — exact slug, exact title, or ≥2 whole words of its title/topic after NFKC. A
-transition is never stitched across two quotes, and a topic-shift clause (`ところで…`,
-`by the way …`) is cut off before (ii) and (iii) are looked for. Only the human's
-explicit old → new sentence writes `現在は [[new]]`. A quote that only retires
-(`やめる`, `stop`) proves `retired-only`: retirement without a successor, which no
-caller acts on — a successor-less face is not implemented, so the distiller stays
-silent. Many false negatives at first are acceptable; a wrong successor in canonical is
-not.
+signal is how a wrong successor got written into canonical. Six review rounds tried to
+read that proof out of ordinary conversation — construction tables, slot markers,
+nearest-name heuristics — and each round's fix was defeated by a new phrasing the next
+round found; the holes were in the METHOD, not any one implementation. Round A′
+(2026-09-19) stopped reading free text for authorisation. `distill/transition.py`
+`find_transition(evidence, old, new)` is the whole relation, pure and model-free, and it
+now proves `superseded` from exactly ONE thing: some physical line of a [USER] quote is
+an exact whole-line match of the closed template `distill/retire_lane.py` already
+carries (`TEMPLATE` / `parse_instruction`, defined once in `transition.py` and shared by
+both):
+
+    <old-slug> は [one reason sentence naming no candidate slug、ending in 役目終わり。]
+    (退役して|やめて)、<new-slug> (に置き換える|に統合する)[。]
+
+Conversation language ≠ authorisation language: an arrow, "instead of", a paraphrase, a
+title instead of a slug — none of it proves a direction any more, however plausible it
+reads. Only the human's exact-template sentence writes `現在は [[new]]`. A quote that
+uses the loose retirement vocabulary (`やめる`, `退役`, `stop`, …) without matching the
+template proves `retired-only`: reference information that the old thing was said to be
+over, never a successor, and no caller acts on it — a successor-less face is not
+implemented, so the distiller stays silent. Many false negatives at first are
+acceptable; a wrong successor in canonical is not.
 
 A TOOL/SELF/ACT-only manifest is refused, and the derived edge map (M7, §7) never calls
 it: a reading of the store may not rewrite what it read. The distiller calls it at the

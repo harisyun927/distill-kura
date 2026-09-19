@@ -305,14 +305,20 @@ def test_a_reason_that_names_a_third_thing_via_particles_is_refused():
     assert "direction not established by the construction" in why(out)
 
 
-def test_taiyaku_and_ni_tougou_are_recognised_by_the_independent_relation():
-    """`Store.retire` re-runs `find_transition` as an independent, nondirectional
-    sanity receipt on the pair the template already decided. Round 4 added `退役して` /
-    `に統合する` to the closed template without teaching the general relation the same
-    two words, so every retirement using them came back `kind: None` — an accepted gap,
-    but a silent one. `_RETIREMENT` and `_REPLACEMENT` now carry `退役` and `に統合`, so
-    the receipt actively CONFIRMS what the template found instead of merely not
-    contradicting it."""
+# `test_taiyaku_and_ni_tougou_are_recognised_by_the_independent_relation` (round 4) is
+# gone: it asserted `find_transition`'s receipt carried separate `"退役"` / `"に統合"`
+# construction names, reconciling a SEPARATE construction table against the template.
+# Round A′ (2026-09-19) deleted that separate table — `find_transition` now matches the
+# same shared `TEMPLATE` this lane does, so there is nothing left to reconcile; the
+# receipt's `constructions` is now the fixed `["閉じた型: 退役して/に置き換える"]` for
+# every template match (see `tests/test_transition.py`). Consistency between the lane
+# and `find_transition` is still exercised below and in `test_retirement_face.py`.
+
+
+def test_find_transition_agrees_with_the_lane_on_the_same_template_line():
+    """`Store.retire` re-runs `find_transition` on the manifest the lane writes, not as
+    a second, independent method any more (round A′: they share one parser) but as a
+    check that both sides read the same spec."""
     from distill_kura.distill.transition import find_transition
 
     text = "old-way は退役して、new-way に統合する。"
@@ -320,11 +326,7 @@ def test_taiyaku_and_ni_tougou_are_recognised_by_the_independent_relation():
                         {"slug": "old-way", "title": TITLES["old-way"]},
                         {"slug": "new-way", "title": TITLES["new-way"]})
     assert r is not None and r["kind"] == "superseded"
-    assert "退役" in r["constructions"]
-    assert "に統合" in r["constructions"]
 
-    # And the lane's own pass still accepts the pair — the independent check agrees,
-    # it does not merely fail to object.
     out = proven(user(text), TITLES)
     assert pairs(out) == [("old-way", "new-way")]
 
@@ -555,16 +557,26 @@ inherit_global_journals = false
     assert tree() == before
 
 
-# ── round 7 (the third confirmation review) ─────────────────────────────────
+# ── round 7 & round 8 (the third and fourth confirmation reviews) ───────────
+#
+# Both rounds hardened the OLD construction-table reading's "marked slot" / "reversed
+# slot" / "filler" machinery against a direction it kept misreading from word order —
+# `に統合`'s destination slot, a filler between a name and its marker, a passive that
+# turns the slot around. Round A′ (2026-09-19) deleted that whole reading, table and
+# slot logic included, so there is no longer any positional analysis to test: every
+# construction those rounds fought over — `に統合する`, `replace … with`, `switch to`,
+# `instead of`, the passive — now proves nothing in EITHER direction unless the line is
+# an exact whole-line match of the closed template, and every one of these round 7/8
+# inputs, in both directions, fails that template. Coverage collapses to
+# `test_free_text_alone_never_proves_succession` in `tests/test_transition.py`
+# (forward direction, several of these constructions) and the regression below (the
+# reverse direction of the one construction the closed template DOES carry).
 
 
-def test_a_construction_with_the_wrong_memory_in_its_marked_slot_proves_nothing():
-    """(review) `new-way は old-way に統合する。` carried `に統合` and both names, and
-    that was enough for old → new — the sentence says the reverse. Most constructions
-    mark one slot (`X に統合` — X is the destination; `replace X with Y` — X goes),
-    and a construction whose marked slot holds the wrong memory no longer counts. For
-    the whole table, not just `に統合`, so the same hole cannot return one verb at a
-    time."""
+def test_the_closed_template_itself_is_still_directional():
+    """The one thing round 7/8 were really guarding — `X は Y に統合する` naming Y as
+    the destination — still holds under the closed template: swapping the names in the
+    template's own two fixed slots proves the opposite pair, never both."""
     from distill_kura.distill.transition import find_transition
 
     old = {"slug": "old-way", "title": TITLES["old-way"]}
@@ -573,133 +585,8 @@ def test_a_construction_with_the_wrong_memory_in_its_marked_slot_proves_nothing(
     def rel(text):
         return find_transition([{"class": "USER", "text": text}], old, new)
 
-    for backwards in ("new-way は old-way に統合する。",
-                      "new-way は old-way に置き換える。",
-                      "new-way は old-way に変更する。",
-                      "new-way に代えて old-way を使う",
-                      "new-way の代わりに old-way を使う",
-                      "今後は old-way で行く。new-way はやめる",
-                      "new-way はやめて、old-way で行く",
-                      "new-way → old-way",
-                      "new-way から old-way へ移す",
-                      "replace new-way with old-way",
-                      "switch to old-way, new-way is retired",
-                      "stop using new-way, now use old-way",
-                      "old-way instead of new-way",
-                      "new-way is superseded by old-way",
-                      "The new way は The old way に統合する。"):
-        r = rel(backwards)
-        assert r is None or r["kind"] != "superseded", backwards
+    forward = rel("old-way はやめて、new-way に統合する。")
+    assert forward is not None and forward["kind"] == "superseded"
 
-    # The same constructions the right way round still prove old → new.
-    for forwards in ("old-way は new-way に統合する。",
-                     "old-way は new-way に置き換える。",
-                     "old-way に代えて new-way を使う",
-                     "old-way → new-way",
-                     "replace old-way with new-way",
-                     "new-way instead of old-way",
-                     "The old way は The new way に統合する。"):
-        r = rel(forwards)
-        assert r is not None and r["kind"] == "superseded", forwards
-
-    # And the lane's own receipt agrees with its template rather than being
-    # contradicted by it.
-    assert pairs(proven(user("old-way は退役して、new-way に統合する。"), TITLES)) \
-        == [("old-way", "new-way")]
-
-
-# ── round 8 (the fourth confirmation review) ────────────────────────────────
-
-
-def test_a_filler_before_the_reversed_slot_does_not_restore_the_proof():
-    """(review) The forward `replace … with` spans a gap, but its reversed twin wanted
-    the name right after `replace`, so `replace the new-way with old-way` matched
-    forward, missed reversed, and proved old → new. A reversed slot is now as loose
-    as the forward pattern it mirrors: English up to the next punctuation, Japanese a
-    short filler that is not a new-noun particle (は・が・を) or a comma."""
-    from distill_kura.distill.transition import find_transition
-
-    old = {"slug": "old-way", "title": TITLES["old-way"]}
-    new = {"slug": "new-way", "title": TITLES["new-way"]}
-
-    def rel(text):
-        return find_transition([{"class": "USER", "text": text}], old, new)
-
-    for backwards in ("replace the new-way with old-way",
-                      "replace our shiny new-way with the old-way",
-                      "instead of the new-way, use old-way",
-                      "switch to the old-way; retire new-way",
-                      "we now use the old-way, drop new-way",
-                      "new-way is superseded by the old-way",
-                      "the old-way instead, new-way is retired",
-                      "new-way は old-way の方に統合する。",
-                      "new-way は old-way のほうに置き換える。",
-                      "今後は old-way のままで行く。new-way はやめる",
-                      "new-way の記録から old-way へ移す"):
-        r = rel(backwards)
-        assert r is None or r["kind"] != "superseded", backwards
-
-    # (review, round 9) No length cap on the filler: a cap is a number a longer
-    # modifier walks past, and past it the forward pattern still matched while the
-    # reversed one did not. These are longer than the 40 / 12 / 60 characters the
-    # first version allowed.
-    long_en = "the astonishingly extremely carefully maintained and thoroughly documented legacy"
-    long_ja = "の長らく現場で使われてきた実績のある安定した方"
-    for backwards in (f"new-way is available; switch to {long_en} old-way",
-                      f"replace {long_en} new-way with old-way",
-                      f"replace new-way with {long_en} old-way",
-                      f"instead of {long_en} new-way, use old-way",
-                      f"we now use {long_en} old-way",
-                      f"new-way は old-way {long_ja}に統合する。",
-                      f"new-way は old-way {long_ja}に置き換える。",
-                      f"今後は old-way {long_ja}で行く。new-way はやめる"):
-        r = rel(backwards)
-        assert r is None or r["kind"] != "superseded", backwards
-
-    # (review, round 10) A particle INSIDE the modifier (`を基盤とする方式`) ended the
-    # filler and the reversal was missed again. The slot is no longer a gap of any
-    # shape: whichever name stands nearest the marker on its marked side is the one in
-    # the slot, however much sits between.
-    for backwards in ("new-wayを基盤とする方式に代えて old-wayを使う。",
-                      "new-wayが使う手順の代わりに old-wayを使う。",
-                      "new-way を old-way が持つ台帳に統合する。",
-                      "new-way を old-way は残す前提の枠に置き換える。",
-                      "今後は old-way が管理する方式で行く。new-way はやめる",
-                      "switch to what old-way was doing; new-way is retired",
-                      "replace what new-way does with old-way"):
-        r = rel(backwards)
-        assert r is None or r["kind"] != "superseded", backwards
-
-    for forwards in ("old-wayを基盤とする方式に代えて new-wayを使う。",
-                     "old-way を new-way が持つ台帳に統合する。",
-                     "replace what old-way does with new-way"):
-        r = rel(forwards)
-        assert r is not None and r["kind"] == "superseded", forwards
-
-    # (review, round 11) The passive turns the slots around: `X is replaced with Y`
-    # puts what goes BEFORE the verb. And a marked slot that names neither memory
-    # is about something else — it must not borrow two names mentioned earlier.
-    for backwards in ("new-way is replaced with old-way",
-                      "the new-way was replaced with the old-way",
-                      "new-way gets replaced with old-way",
-                      "old-way and new-way. switch to a plan.",
-                      "old-way and new-way. instead of a plan, use a list.",
-                      "old-way and new-way; replace the plan with a list",
-                      "old-way と new-way。今後は 別の方式で行く。",
-                      "old-way と new-way。手順書は 台帳に統合する。"):
-        r = rel(backwards)
-        assert r is None or r["kind"] != "superseded", backwards
-
-    for forwards in ("old-way is replaced with new-way",
-                     "the old-way was replaced with the new-way"):
-        r = rel(forwards)
-        assert r is not None and r["kind"] == "superseded", forwards
-
-    # A filler the other way round still proves old → new — the loose slot does not
-    # match the RIGHT name in the wrong place.
-    for forwards in ("replace the old-way with the new-way",
-                     "instead of the old-way, use the new-way",
-                     "switch to the new-way; retire old-way",
-                     "old-way は new-way の方に統合する。"):
-        r = rel(forwards)
-        assert r is not None and r["kind"] == "superseded", forwards
+    backward = rel("new-way はやめて、old-way に統合する。")
+    assert backward is None or backward["kind"] != "superseded"

@@ -1082,8 +1082,10 @@ class Distiller:
     # and is not read here: "the model proposed it" is not "the human said it", and
     # treating the gate's correct refusal as evidence resurrected exactly what the
     # gate threw away. The only trigger is `find_transition`: ONE surviving [USER]
-    # quote that retires a memory this store holds AND names this new one as its
-    # successor. `Store.retire` runs the same relation again; nothing here is trusted.
+    # quote whose text contains an exact whole-line match of the closed template
+    # (`distill/transition.py`) naming a memory this store holds AND this new one as
+    # its successor — free text, however plausible, proves nothing (round A′,
+    # 2026-09-19). `Store.retire` runs the same relation again; nothing here is trusted.
     def _retirement_target(self, man: dict, new_slug: str) -> dict | None:
         """The proof that a [USER] quote in this manifest retires an existing memory
         in favour of `new_slug`, or None.

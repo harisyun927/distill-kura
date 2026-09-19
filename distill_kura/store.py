@@ -771,8 +771,11 @@ class Store:
 
         The door does not trust its caller: the pipeline runs the same relation to
         decide whether to knock, and this runs it again on the same manifest. A
-        proposal (even a refused `superseded` tag) is not a proof — only one [USER]
-        sentence that retires the old memory AND names this successor in it."""
+        proposal (even a refused `superseded` tag) is not a proof, and neither is any
+        phrasing of the idea in free text — only an exact whole-line match of the one
+        closed template `distill.transition.TEMPLATE` carries (retires the old memory
+        AND names this successor, in that fixed grammar) is proof (round A′,
+        2026-09-19)."""
         from .distill.transition import find_transition
 
         titles = {sl: t for t, sl in self.titles().items()}

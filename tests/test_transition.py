@@ -2,12 +2,17 @@
 
 Every test is named for the failure it prevents. The relation is pure and knows
 nothing about the model's proposal on purpose: what writes `現在は [[new]]` into
-canonical is the human's own explicit old → new sentence, or nothing.
+canonical is an exact whole-line match of the one closed template
+(`distill_kura.distill.transition.TEMPLATE`), or nothing. Free text — however
+plausible, however explicit it reads to a person — is never proof of a direction
+(round A′, 2026-09-19); it can still be reference information (`retired-only`).
 """
 from __future__ import annotations
 
 import os
 import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -34,18 +39,6 @@ def test_naming_both_memories_without_a_construction_proves_nothing():
     assert _t("old-way and new-way are both fine") is None
 
 
-def test_the_explicit_forms_prove_succession_in_either_language():
-    for text in ("old-way はやめて、今後は new-way で行く",
-                 "old-way に代えて new-way を使う",
-                 "old-way → new-way",
-                 "we replaced old-way with new-way",
-                 "stop using old-way, now use new-way",
-                 "switch to new-way, old-way is done"):
-        r = _t(text)
-        assert r and r["kind"] == "superseded" and r["new"] == "new-way", text
-        assert r["constructions"] and r["quote"] == text, text
-
-
 def test_a_transition_is_never_stitched_across_two_quotes():
     r = find_transition([{"class": "USER", "text": "old-way はもうやめる"},
                          {"class": "USER", "text": "今後は new-way で行く"}],
@@ -55,21 +48,87 @@ def test_a_transition_is_never_stitched_across_two_quotes():
 
 
 def test_only_user_class_evidence_can_prove_a_transition():
-    ev = [{"class": c, "text": "old-way はやめて、今後は new-way で行く"}
+    ev = [{"class": c, "text": "old-way はやめて、new-way に統合する。"}
           for c in ("TOOL", "SELF", "ACT")]
     assert find_transition(ev, {"slug": "old-way", "title": "the old way"},
                            {"slug": "new-way", "title": "the new way"}) is None
 
 
-def test_two_title_or_topic_words_can_stand_in_for_the_new_name():
-    r = _t("old-way はやめて、今後は GPU 温度の記録を取る",
-           new=("gpu-temperature", "GPU 温度の記録"))
-    assert r and r["kind"] == "superseded"
-    # one word alone is not a name
-    assert _t("old-way はやめて、今後は温度を見る",
-              new=("gpu-temperature", "GPU 温度の記録"))["kind"] == "retired-only"
-
-
 def test_a_paraphrase_of_the_old_memory_is_not_its_name():
     """Exact slug or exact index title only — a model's paraphrase cannot retire."""
     assert _t("the way we used to do it is over, now use new-way") is None
+
+
+# ── free text alone never proves succession any more (round A′) ────────────────────
+# Every one of these fooled the old construction-table reading in some review round.
+# None of them may come back `superseded`; at most they are `retired-only`.
+
+@pytest.mark.parametrize("text", [
+    "old-way はやめて、今後は new-way で行く",
+    "old-way に代えて new-way を使う",
+    "old-way → new-way",
+    "we replaced old-way with new-way",
+    "stop using old-way, now use new-way",
+    "switch to new-way, old-way is done",
+    "old-way は終わり。the new way が後継になる。",   # title-word successor
+])
+def test_free_text_alone_never_proves_succession(text):
+    r = _t(text)
+    assert r is None or r["kind"] != "superseded", text
+
+
+# ── the closed template: positive cases ─────────────────────────────────────────────
+
+@pytest.mark.parametrize("text", [
+    "old-way はやめて、new-way に統合する。",
+    "old-way は退役して、new-way に置き換える。",
+    "old-way はやめて、new-way に置き換える。",
+    "old-way は退役して、new-way に統合する。",
+    "old-way はやめて、new-way に統合する",            # the closing 。 is optional
+])
+def test_the_closed_template_proves_succession(text):
+    r = _t(text)
+    assert r and r["kind"] == "superseded" and r["old"] == "old-way" \
+        and r["new"] == "new-way", text
+    assert r["quote"] == text
+
+
+def test_the_template_with_a_reason_sentence_proves_succession():
+    text = "old-way は用途消失で役目終わり。退役して、new-way に置き換える。"
+    r = _t(text)
+    assert r and r["kind"] == "superseded" and r["new"] == "new-way"
+
+
+# ── the closed template: negative cases ─────────────────────────────────────────────
+
+def test_swapped_slugs_prove_only_the_reverse():
+    text = "old-way はやめて、new-way に統合する。"
+    forward = _t(text)
+    assert forward and forward["kind"] == "superseded" and forward["new"] == "new-way"
+    reverse = find_transition([{"class": "USER", "text": text}],
+                              {"slug": "new-way", "title": "the new way"},
+                              {"slug": "old-way", "title": "the old way"})
+    assert reverse is None or reverse["kind"] != "superseded"
+
+
+def test_a_title_in_place_of_a_slug_does_not_prove():
+    r = _t("the old way はやめて、new-way に統合する。")
+    assert r is None or r["kind"] != "superseded"
+
+
+def test_the_template_embedded_in_a_longer_line_does_not_prove():
+    r = _t("念のため old-way はやめて、new-way に統合する。")
+    assert r is None or r["kind"] != "superseded"
+
+
+def test_two_lines_each_prove_their_own_pair():
+    quote = ("old-way はやめて、new-way に統合する。\n"
+             "third-thing は退役して、fourth-thing に置き換える。")
+    r1 = find_transition([{"class": "USER", "text": quote}],
+                         {"slug": "old-way", "title": "the old way"},
+                         {"slug": "new-way", "title": "the new way"})
+    assert r1 and r1["kind"] == "superseded" and r1["new"] == "new-way"
+    r2 = find_transition([{"class": "USER", "text": quote}],
+                         {"slug": "third-thing", "title": "Third thing"},
+                         {"slug": "fourth-thing", "title": "Fourth thing"})
+    assert r2 and r2["kind"] == "superseded" and r2["new"] == "fourth-thing"
