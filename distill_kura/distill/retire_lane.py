@@ -94,14 +94,25 @@ LANE_KIND = "retirement-lane"
 # nowhere else the pattern does not already allow for.
 _WS = r" *"
 _SLUG = r"[0-9a-z_\-]+"
+# The middle sentence carries a reason and NOTHING else: no subject/topic/object marker
+# and no comma, so a clause like "old-way は残すが、予備サーバーは役目終わり" (which
+# names a THIRD thing, in a different voice) cannot slip through as "just the reason".
+# It must end in the one fixed phrase 役目終わり, right before the sentence's own 。.
+_REASON = r"[^はがを、\n。]*役目終わり"
 _TEMPLATE = re.compile(
     rf"^(?P<old>{_SLUG}){_WS}は{_WS}"
-    rf"(?:(?P<reason>[^。\n]+。){_WS})?"
+    rf"(?:(?P<reason>{_REASON})。{_WS})?"
     rf"(?:退役して|やめて)、{_WS}"
     rf"(?P<new>{_SLUG}){_WS}"
     rf"(?:に置き換える|に統合する)"
     rf"。?$"
 )
+
+# The two verbs the template's front slot carries. A line that uses one of these AND
+# names a candidate — by slug or by title — but still fails the closed template is not
+# ordinary talk: it is an attempted retirement the template could not parse, and it must
+# say so out loud rather than let the watermark pass over it in silence.
+_VERB = re.compile(r"退役して|やめて")
 
 
 def _names_slug(text: str, slug: str) -> bool:
@@ -115,11 +126,31 @@ def _names_slug(text: str, slug: str) -> bool:
 
 
 def _named_slugs(line: str, candidates: dict[str, str]) -> list[str]:
-    """Every candidate SLUG this line names, by literal presence. Titles do not count:
-    the template can only ever point at a slug, so neither does the count that decides
-    whether a non-matching line deserves a loud refusal or silence."""
+    """Every candidate SLUG this line names, by literal presence. Titles do not count
+    here: this feeds MAX_NAMES (a list of names, not an instruction) and the "two bare
+    slugs outside the template" refusal, both of which are about slugs the template
+    itself could have pointed at."""
     low = _norm(line)
     return [slug for slug in candidates if _names_slug(low, slug)]
+
+
+def _names_title(text: str, title: str) -> bool:
+    """Whole-string presence of a candidate's index TITLE in already-`_norm`-ed text."""
+    t = _norm(title).strip()
+    return bool(t) and t in text
+
+
+def _named_or_titled_slugs(line: str, candidates: dict[str, str]) -> list[str]:
+    """Every candidate this line names, by slug OR by its index title. Used only to
+    decide whether a line that uses the template's own verb but fails the template is a
+    failed attempt (loud skip) rather than ordinary talk (silence) — a person naming the
+    memory by its title deserves the same loud refusal as one naming it by slug."""
+    low = _norm(line)
+    out = []
+    for slug, title in candidates.items():
+        if _names_slug(low, slug) or _names_title(low, title):
+            out.append(slug)
+    return out
 
 
 def _match_template(line: str, candidates: dict[str, str]) -> tuple[str, str] | None:
@@ -136,7 +167,8 @@ def _match_template(line: str, candidates: dict[str, str]) -> tuple[str, str] | 
     if not old or not new or old == new:
         return None                        # unknown slug, or a memory "succeeding" itself
     reason = m.group("reason")
-    if reason and any(_names_slug(reason, slug) for slug in candidates):
+    if reason and any(_names_slug(reason, slug) or _names_title(reason, title)
+                      for slug, title in candidates.items()):
         return None                        # the reason clause is not about a third memory
     return old, new
 
@@ -146,10 +178,13 @@ def _accept(line: str, old: str, new: str, candidates: dict[str, str]) -> dict:
     relation `Store.retire` re-runs on the manifest, as an independent receipt — never a
     second vote on direction, since `find_transition` does not read direction at all.
 
-    Its construction vocabulary does not cover every phrasing this template carries
-    (round 4 added `退役して` and `に統合する`, which the general relation does not know),
-    so `None` here is an expected gap, not a disagreement, and the template's own match
-    stands. A `kind` that is neither `None` nor `superseded` WOULD be a genuine
+    Its construction vocabulary now includes `退役` and `に統合` (added alongside this
+    template so the two independent checks use the same words), but it still does not
+    cover every phrasing this template's OTHER verb slot carries (`やめて` / `に置き換
+    える` are read as `retired-only`/`に置(き)?換え` already, so this is mostly belt and
+    braces) — so `None` here can still happen and is an expected gap, not a disagreement,
+    and the template's own match stands either way. A `kind` that is neither `None` nor
+    `superseded` WOULD be a genuine
     contradiction of what the template found, and is refused rather than kept — this
     should not be reachable given the checks above, but silently trusting that is how a
     bug becomes a wrong retirement.
@@ -180,6 +215,17 @@ def _judge_line(line: str, candidates: dict[str, str]) -> dict | None:
             # `kura retire` door instead of leaving the AI to guess.
             return {"skipped": "direction not established by the construction",
                     "names": named, "quote": line.strip()[:120]}
+        if _VERB.search(_norm(line)):
+            # The line uses the template's own verb (退役して / やめて) and names at
+            # least one candidate — by slug or by title — yet still failed the closed
+            # template (bad punctuation, a broken line, a verb that doesn't pair with
+            # the rest). That is a failed retirement attempt, not ordinary talk, and
+            # letting the watermark pass over it in silence is exactly the bug this
+            # lane exists to not repeat.
+            named_or_titled = _named_or_titled_slugs(line, candidates)
+            if named_or_titled:
+                return {"skipped": "direction not established by the construction",
+                        "names": named_or_titled, "quote": line.strip()[:120]}
         return None                        # ordinary talk; logging it would bury what matters
     old, new = hit
     return _accept(line, old, new, candidates)

@@ -269,8 +269,11 @@ def test_the_four_verb_combinations_are_all_carried():
 
 def test_a_reason_sentence_between_は_and_the_verb_is_carried():
     """The optional middle sentence carries no name of its own — it is where the reason
-    goes ("PR2 完了で役目終わり")."""
-    out = proven(user("old-way は仕事を終えたので役目終わり。"
+    goes ("PR2 完了で役目終わり"). Round 5 narrowed the reason clause to exclude
+    は/が/を/、 (see `test_a_reason_that_names_a_third_thing_via_particles_is_refused`
+    below), so this uses a reason with none of them rather than the original
+    "仕事を終えたので役目終わり" (which contains を)."""
+    out = proven(user("old-way は契約終了で役目終わり。"
                       "退役して、new-way に置き換える。"), TITLES)
     assert pairs(out) == [("old-way", "new-way")]
 
@@ -282,3 +285,68 @@ def test_the_template_must_match_the_whole_line_not_a_fragment_of_it():
     for text in ("メモ: old-way はやめて、new-way に統合する。",
                  "old-way はやめて、new-way に統合する。以上。"):
         assert pairs(proven(user(text), TITLES)) == [], text
+
+
+# ── round 5: the four remaining holes ───────────────────────────────────────
+
+def test_a_reason_that_names_a_third_thing_via_particles_is_refused():
+    """The middle sentence is where the REASON goes, not a second ruling. A reason
+    clause carrying its own subject/object marker or a comma can smuggle a different
+    instruction past the containment check (it never literally names a candidate slug,
+    so the old, unrestricted `[^。\\n]+。` reason group let it through and old-way was
+    retired even though the actual instruction was to retire the SPARE SERVER, not
+    old-way). The reason clause is now restricted to a single closed phrase — no
+    は/が/を/、, ending in 役目終わり — so this whole line fails the template and, since
+    it names two candidates outside the template, is refused loudly rather than
+    misread."""
+    text = "old-way は残すが、予備サーバーは役目終わり。退役して、new-way に置き換える。"
+    out = proven(user(text), TITLES)
+    assert pairs(out) == []
+    assert "direction not established by the construction" in why(out)
+
+
+def test_taiyaku_and_ni_tougou_are_recognised_by_the_independent_relation():
+    """`Store.retire` re-runs `find_transition` as an independent, nondirectional
+    sanity receipt on the pair the template already decided. Round 4 added `退役して` /
+    `に統合する` to the closed template without teaching the general relation the same
+    two words, so every retirement using them came back `kind: None` — an accepted gap,
+    but a silent one. `_RETIREMENT` and `_REPLACEMENT` now carry `退役` and `に統合`, so
+    the receipt actively CONFIRMS what the template found instead of merely not
+    contradicting it."""
+    from distill_kura.distill.transition import find_transition
+
+    text = "old-way は退役して、new-way に統合する。"
+    r = find_transition([{"class": "USER", "text": text}],
+                        {"slug": "old-way", "title": TITLES["old-way"]},
+                        {"slug": "new-way", "title": TITLES["new-way"]})
+    assert r is not None and r["kind"] == "superseded"
+    assert "退役" in r["constructions"]
+    assert "に統合" in r["constructions"]
+
+    # And the lane's own pass still accepts the pair — the independent check agrees,
+    # it does not merely fail to object.
+    out = proven(user(text), TITLES)
+    assert pairs(out) == [("old-way", "new-way")]
+
+
+def test_a_failed_attempt_that_names_by_title_is_skipped_not_silent():
+    """A line using the template's own verb (`退役して` / `やめて`) and naming a
+    candidate only by its TITLE — not by slug — still fails the closed template (the
+    template only ever reads slugs), but that must not read as ordinary talk: it is a
+    failed retirement attempt and has to say so, the same as it would if the names were
+    bare slugs."""
+    titles = {**TITLES, "current-policy": "現行方針", "new-policy": "新方針"}
+    out = proven(user("現行方針はやめて、新方針に統合する。"), titles)
+    assert pairs(out) == []
+    assert "direction not established by the construction" in why(out)
+
+
+def test_a_line_broken_by_a_newline_is_skipped_not_silently_lost():
+    """The template is line-anchored (each LINE is its own instruction), so an
+    instruction split across two lines by a stray newline can never match as a whole —
+    but the first half still uses the template's own verb and names a real candidate,
+    so it must be flagged rather than let the watermark walk past it as if nothing had
+    been said."""
+    out = proven(user("old-way は退役して、\nnew-way に置き換える。"), TITLES)
+    assert pairs(out) == []
+    assert "direction not established by the construction" in why(out)
