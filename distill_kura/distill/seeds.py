@@ -24,8 +24,8 @@ def _now() -> str:
 
 class Seeds:
     def __init__(self, path: str):
+        # Read-only construction; the directory is made by the first write.
         self.path = path
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     @contextlib.contextmanager
     def _locked(self):
@@ -36,6 +36,7 @@ class Seeds:
         those and lost seeds — an append landing between confirm's read and its
         replace was simply dropped, and two confirms sharing one tmp file truncated
         each other's inode."""
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         with open(self.path + ".lock", "w") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)
             try:

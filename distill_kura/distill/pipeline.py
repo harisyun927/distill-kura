@@ -204,7 +204,7 @@ def _curation_of(out: str) -> tuple[list[str], dict[str, str], str | None]:
 class Distiller:
     def __init__(self, reg: Registry, store: Store, journals: dict[str, str] | None = None,
                  language: str | None = None, scribe_slots: int = 4,
-                 chunk_chars: int = CHUNK_CHARS):
+                 chunk_chars: int = CHUNK_CHARS, writes: bool = True):
         self.reg = reg
         self.store = store
         self.models = reg.models_for(store)      # never the shared set behind a profile
@@ -266,7 +266,11 @@ class Distiller:
         # the brain never answered lives here until it is drunk for real (pending.py).
         self.pending = PendingShelf(os.path.join(self.still, "pending"))
         self.pending_compose = PendingShelf(os.path.join(self.still, "pending-compose"))
-        os.makedirs(self.drafts_dir, exist_ok=True)
+        # `writes=False` is a Distiller built to LOOK (a dry run): it makes nothing on
+        # the store it is handed. Watermarks / Seeds already defer their directories
+        # to the first write; this is the one directory the constructor made itself.
+        if writes:
+            os.makedirs(self.drafts_dir, exist_ok=True)
         self._store_text: str | None = None
 
     # ── model roles (charter first, byte-identical, for the shared prefix) ──
@@ -1078,8 +1082,10 @@ class Distiller:
     # and is not read here: "the model proposed it" is not "the human said it", and
     # treating the gate's correct refusal as evidence resurrected exactly what the
     # gate threw away. The only trigger is `find_transition`: ONE surviving [USER]
-    # quote that retires a memory this store holds AND names this new one as its
-    # successor. `Store.retire` runs the same relation again; nothing here is trusted.
+    # quote whose text contains an exact whole-line match of the closed template
+    # (`distill/transition.py`) naming a memory this store holds AND this new one as
+    # its successor — free text, however plausible, proves nothing (round A′,
+    # 2026-09-19). `Store.retire` runs the same relation again; nothing here is trusted.
     def _retirement_target(self, man: dict, new_slug: str) -> dict | None:
         """The proof that a [USER] quote in this manifest retires an existing memory
         in favour of `new_slug`, or None.
@@ -1097,7 +1103,7 @@ class Distiller:
                         if sl != new_slug), reverse=True)
         for _, sl in cands:
             r = transition.find_transition(quotes, {"slug": sl, "title": titles.get(sl, "")},
-                                           new)
+                                           new, known=self.store.slug_set())
             if r and r["kind"] == "superseded":
                 return r
         return None
