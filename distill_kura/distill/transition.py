@@ -110,8 +110,8 @@ _RETIREMENT = [
     ("done with", r"\bdone with\b"),
     # The same fixed verb slot the closed template's front side carries. A full
     # positive inflection that ends the clause, never the bare prefix (`退役しない` /
-    # `退役してはいけない` are not retirements). `_END` below turns a clause ender into
-    # a lookahead so a continuation cannot be mistaken for a ruling.
+    # `退役してはいけない` are not retirements): the lookahead requires a clause ender
+    # so a continuation cannot be mistaken for a ruling.
     ("退役", r"退役(?:して|した|する|します)(?=[\s、,。．.!?！？]|$)"),
 ]
 
