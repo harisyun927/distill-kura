@@ -112,7 +112,17 @@ _SLOTS = [
     ("から…へ", r"から", "before", "old"),
     ("instead of", r"\binstead of\b", "after", "old"),
     ("instead", r"\binstead\b(?! of)", "before", "new"),
-    ("replace … with", r"\breplac(?:e|ed|es|ing)\b", "after", "old"),
+    # Active `replace X with Y` marks X (after the verb) as what goes; passive `X is
+    # replaced with Y` marks X (before the verb) as what goes and Y (after `with`) as
+    # what comes. The active entry must not fire on a passive's `replaced`, so it
+    # refuses a preceding be-verb (fixed-width lookbehinds: `re` allows no other kind).
+    ("replace … with", r"(?<!\bis )(?<!\bare )(?<!\bwas )(?<!\bwere )(?<!\bbe )"
+                       r"(?<!\bbeen )(?<!\bbeing )(?<!\bgets )(?<!\bgot )"
+                       r"\breplac(?:e|ed|es|ing)\b", "after", "old"),
+    ("replace … with", r"\b(?:is|are|was|were|be|been|being|gets|got)\s+replaced\b",
+                       "before", "old"),
+    ("replace … with", r"\b(?:is|are|was|were|be|been|being|gets|got)\s+replaced\s+with\b",
+                       "after", "new"),
     ("switch to", r"\bswitch(?:ed|es|ing)?\s+to\b", "after", "new"),
     ("now use", r"\bnow\s+(?:use|using|we use|we're using)\b", "after", "new"),
     ("superseded by", r"\bsuperseded by\b", "after", "new"),
@@ -139,7 +149,9 @@ def _clauses(text: str) -> str:
         if _SHIFT.search(part):
             break
         keep.append(part)
-    return " ".join(keep)
+    # Joined with a newline, not a space, so the sentence boundary survives: every gap
+    # in the tables already stops at `\n`, and `_nearest` must not reach across it.
+    return "\n".join(keep)
 
 
 def _names(text: str, *candidates: str) -> str | None:
@@ -199,14 +211,19 @@ def _name_pat(slug: str, title: str) -> str:
 
 
 def _nearest(text: str, pos: int, side: str, old_pat: str, new_pat: str) -> str | None:
-    """Which memory — "old" or "new" — stands nearest to `pos` on `side`, or None if
-    neither is named there at all."""
+    """Which memory — "old" or "new" — stands nearest to `pos` on `side`, within the
+    same sentence, or None if neither is named there at all. `old-way と new-way。
+    手順書は 台帳に統合する。` names both memories, but not in the sentence that
+    carries the construction, and that sentence is about something else."""
+    lo = text.rfind("\n", 0, pos) + 1
+    hi = text.find("\n", pos)
+    hi = len(text) if hi < 0 else hi
     best: tuple[int, str] | None = None
     for who, pat in (("old", old_pat), ("new", new_pat)):
         for m in re.finditer(pat, text):
-            if side == "before" and m.end() <= pos:
+            if side == "before" and lo <= m.start() and m.end() <= pos:
                 d = pos - m.end()
-            elif side == "after" and m.start() >= pos:
+            elif side == "after" and pos <= m.start() and m.end() <= hi:
                 d = m.start() - pos
             else:
                 continue
@@ -222,8 +239,11 @@ def _reversed(name: str, text: str, old_pat: str, new_pat: str) -> bool:
             continue
         for m in re.finditer(marker, text):
             pos = m.start() if side == "before" else m.end()
-            found = _nearest(text, pos, side, old_pat, new_pat)
-            if found is not None and found != expect:
+            # The slot must HOLD the expected memory, not merely lack the wrong one:
+            # `old-way and new-way. switch to a plan.` names nothing after `switch
+            # to`, and a construction whose marked slot is empty of both memories is
+            # about something else — it must not borrow two names mentioned earlier.
+            if _nearest(text, pos, side, old_pat, new_pat) != expect:
                 return True
     return False
 

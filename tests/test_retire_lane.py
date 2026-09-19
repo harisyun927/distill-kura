@@ -676,6 +676,25 @@ def test_a_filler_before_the_reversed_slot_does_not_restore_the_proof():
         r = rel(forwards)
         assert r is not None and r["kind"] == "superseded", forwards
 
+    # (review, round 11) The passive turns the slots around: `X is replaced with Y`
+    # puts what goes BEFORE the verb. And a marked slot that names neither memory
+    # is about something else — it must not borrow two names mentioned earlier.
+    for backwards in ("new-way is replaced with old-way",
+                      "the new-way was replaced with the old-way",
+                      "new-way gets replaced with old-way",
+                      "old-way and new-way. switch to a plan.",
+                      "old-way and new-way. instead of a plan, use a list.",
+                      "old-way and new-way; replace the plan with a list",
+                      "old-way と new-way。今後は 別の方式で行く。",
+                      "old-way と new-way。手順書は 台帳に統合する。"):
+        r = rel(backwards)
+        assert r is None or r["kind"] != "superseded", backwards
+
+    for forwards in ("old-way is replaced with new-way",
+                     "the old-way was replaced with the new-way"):
+        r = rel(forwards)
+        assert r is not None and r["kind"] == "superseded", forwards
+
     # A filler the other way round still proves old → new — the loose slot does not
     # match the RIGHT name in the wrong place.
     for forwards in ("replace the old-way with the new-way",
