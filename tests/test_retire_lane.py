@@ -267,6 +267,23 @@ def test_the_four_verb_combinations_are_all_carried():
         assert pairs(out) == [("old-way", "new-way")], text
 
 
+def test_an_english_instruction_is_faced_by_the_lane():
+    """The closed English template (PR-A, 2026-09-19) proves at the lane level exactly
+    like the Japanese one: `proven()` returns a hit with `old`/`new`, which `run_lane`
+    would carry into `faced`."""
+    out = proven(user("retire old-way, replaced by new-way."), TITLES)
+    assert pairs(out) == [("old-way", "new-way")]
+
+
+def test_an_english_near_miss_is_skipped_not_silent():
+    """`retire the old-way, replaced by new-way.` uses the English template's own verb
+    (`retire`) and names a candidate, but the stray `the` fails the closed template —
+    same loud-skip treatment as a failed Japanese attempt, never silence."""
+    out = proven(user("retire the old-way, replaced by new-way."), TITLES)
+    assert pairs(out) == []
+    assert "direction not established by the construction" in why(out)
+
+
 def test_a_reason_sentence_between_は_and_the_verb_is_carried():
     """The optional middle sentence carries no name of its own — it is where the reason
     goes ("PR2 完了で役目終わり"). Round 5 narrowed the reason clause to exclude
