@@ -88,37 +88,35 @@ _RETIREMENT = [
 # Most constructions mark ONE of the two slots: `X に統合する` says X is the
 # destination, `replace X with Y` says X is what goes. Finding the marker somewhere
 # beside both names is not enough — `new-way は old-way に統合する` carries `に統合`
-# and both names and says the OPPOSITE of old → new. Each entry is (construction name,
-# pattern with `{old}` / `{new}` slots); a match means that construction, in this
-# quote, puts the wrong memory in its marked slot, and it no longer counts as proof.
+# and both names and says the OPPOSITE of old → new.
 #
-# The slot is as loose as the forward pattern it mirrors: `replace … with` spans a gap,
-# so `replace the new-way with old-way` must be caught with the same gap, not by
-# demanding the name right after the marker. A Japanese slot may carry a short filler
-# (`old-way の方に統合`) but not a particle that starts a new noun (は・が・を) or a
-# comma; an English slot may carry determiners and modifiers up to the next
-# punctuation. No length cap on either: a cap is a number a longer modifier walks
-# past, and past it the forward pattern would still match while this one did not.
-# Too loose only withholds proof — the safe direction — never grants it.
-_JGAP = r"[^はがを、。\n]*"
-_EGAP = r"[^.,;:\n]*?"
-_REVERSED = [
-    ("やめて…で行く", rf"{{old}}{_JGAP}(?:で|に)(?:行く|いく|する)"),
-    ("に代えて", rf"{{new}}{_JGAP}に代えて"),
-    ("代わりに", rf"{{new}}{_JGAP}代わりに"),
-    ("今後は", rf"今後は{_JGAP}{{old}}"),
-    ("に変更", rf"{{old}}{_JGAP}に(?:変更|変え)"),
-    ("に置き換え", rf"{{old}}{_JGAP}に置(?:き)?換え"),
-    ("→", r"{new}\s*→\s*{old}"),
-    ("から…へ", rf"{{new}}{_JGAP}から"),
-    ("instead of", rf"\binstead of\s+{_EGAP}{{new}}"),
-    ("instead", rf"{{old}}\s+{_EGAP}\binstead\b"),
-    ("replace … with", r"\breplac(?:e|ed|es|ing)\s+(?:(?!\bwith\b)[^.,;:\n])*?"
-                       r"{new}\b(?:(?!\bwith\b)[^.,;:\n])*?\bwith\b"),
-    ("switch to", rf"\bswitch(?:ed|es|ing)?\s+to\s+{_EGAP}{{old}}"),
-    ("now use", rf"\bnow\s+(?:use|using|we use|we're using)\s+{_EGAP}{{old}}"),
-    ("superseded by", rf"\bsuperseded by\s+{_EGAP}{{old}}"),
-    ("に統合", rf"{{old}}{_JGAP}に統合"),
+# Not a gap pattern. Three versions tried to describe what may sit between the name and
+# the marker — a fixed width, a filler that stops at a particle, a filler that stops at
+# punctuation — and each was a rule a longer or differently-shaped modifier walked past
+# (`new-wayを基盤とする方式に代えて old-wayを使う`: the を inside the modifier ended
+# the filler). The slot is read the other way round: of the two names, WHICHEVER STANDS
+# NEAREST the marker on its marked side is the one in that slot, however much sits
+# between. Each entry is (construction, marker, side, the memory that belongs there).
+# `→` has two marked sides and two entries. A quote where the nearest name on the
+# marked side is the wrong one says the reverse, and that construction no longer counts.
+# Too strict only withholds proof — the safe direction — never grants it.
+_SLOTS = [
+    ("やめて…で行く", r"(?:で|に)(?:行く|いく|する)", "before", "new"),
+    ("に代えて", r"に代えて", "before", "old"),
+    ("代わりに", r"代わりに", "before", "old"),
+    ("今後は", r"今後は", "after", "new"),
+    ("に変更", r"に(?:変更|変え)", "before", "new"),
+    ("に置き換え", r"に置(?:き)?換え", "before", "new"),
+    ("→", r"→", "before", "old"),
+    ("→", r"→", "after", "new"),
+    ("から…へ", r"から", "before", "old"),
+    ("instead of", r"\binstead of\b", "after", "old"),
+    ("instead", r"\binstead\b(?! of)", "before", "new"),
+    ("replace … with", r"\breplac(?:e|ed|es|ing)\b", "after", "old"),
+    ("switch to", r"\bswitch(?:ed|es|ing)?\s+to\b", "after", "new"),
+    ("now use", r"\bnow\s+(?:use|using|we use|we're using)\b", "after", "new"),
+    ("superseded by", r"\bsuperseded by\b", "after", "new"),
+    ("に統合", r"に統合", "before", "new"),
 ]
 
 # A clause that changes the subject can never supply the successor.
@@ -200,13 +198,33 @@ def _name_pat(slug: str, title: str) -> str:
     return "(?:" + "|".join(alts) + ")"
 
 
+def _nearest(text: str, pos: int, side: str, old_pat: str, new_pat: str) -> str | None:
+    """Which memory — "old" or "new" — stands nearest to `pos` on `side`, or None if
+    neither is named there at all."""
+    best: tuple[int, str] | None = None
+    for who, pat in (("old", old_pat), ("new", new_pat)):
+        for m in re.finditer(pat, text):
+            if side == "before" and m.end() <= pos:
+                d = pos - m.end()
+            elif side == "after" and m.start() >= pos:
+                d = m.start() - pos
+            else:
+                continue
+            if best is None or d < best[0]:
+                best = (d, who)
+    return best[1] if best else None
+
+
 def _reversed(name: str, text: str, old_pat: str, new_pat: str) -> bool:
     """Does construction `name`, in this quote, put the wrong memory in its marked slot?"""
-    for n, pat in _REVERSED:
-        # str.replace, not str.format: the name patterns carry regex braces.
-        pat = pat.replace("{old}", old_pat).replace("{new}", new_pat)
-        if n == name and re.search(pat, text):
-            return True
+    for n, marker, side, expect in _SLOTS:
+        if n != name:
+            continue
+        for m in re.finditer(marker, text):
+            pos = m.start() if side == "before" else m.end()
+            found = _nearest(text, pos, side, old_pat, new_pat)
+            if found is not None and found != expect:
+                return True
     return False
 
 

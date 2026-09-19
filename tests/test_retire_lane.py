@@ -656,6 +656,26 @@ def test_a_filler_before_the_reversed_slot_does_not_restore_the_proof():
         r = rel(backwards)
         assert r is None or r["kind"] != "superseded", backwards
 
+    # (review, round 10) A particle INSIDE the modifier (`を基盤とする方式`) ended the
+    # filler and the reversal was missed again. The slot is no longer a gap of any
+    # shape: whichever name stands nearest the marker on its marked side is the one in
+    # the slot, however much sits between.
+    for backwards in ("new-wayを基盤とする方式に代えて old-wayを使う。",
+                      "new-wayが使う手順の代わりに old-wayを使う。",
+                      "new-way を old-way が持つ台帳に統合する。",
+                      "new-way を old-way は残す前提の枠に置き換える。",
+                      "今後は old-way が管理する方式で行く。new-way はやめる",
+                      "switch to what old-way was doing; new-way is retired",
+                      "replace what new-way does with old-way"):
+        r = rel(backwards)
+        assert r is None or r["kind"] != "superseded", backwards
+
+    for forwards in ("old-wayを基盤とする方式に代えて new-wayを使う。",
+                     "old-way を new-way が持つ台帳に統合する。",
+                     "replace what old-way does with new-way"):
+        r = rel(forwards)
+        assert r is not None and r["kind"] == "superseded", forwards
+
     # A filler the other way round still proves old → new — the loose slot does not
     # match the RIGHT name in the wrong place.
     for forwards in ("replace the old-way with the new-way",
