@@ -663,7 +663,8 @@ class Distiller:
                                            allowed=cont, known_slugs=topology)
             if observations is not None:
                 observations.append({"attempt": attempt, "shape": False,
-                                     "surface": surface, "violations": list(bad)})
+                                     "surface": surface, "raw": out,
+                                     "violations": list(bad)})
             if not bad:
                 break
             if attempt == 2:
@@ -794,7 +795,7 @@ class Distiller:
             observations.append({"attempt": 1, "shape": False,
                                  "surface": "\n".join([head, plain, " ".join(s_ann.values()),
                                                         cand_ann]),
-                                 "violations": list(bad)})
+                                 "raw": out or "", "violations": list(bad)})
         if bad:
             _log(f"      ✗ extension surface fails the floor: {bad}")
             return None

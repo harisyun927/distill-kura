@@ -58,6 +58,30 @@ def test_a_floor_violation_is_recorded_with_its_reason(tmp_path):
     rows = _read(d, "rejected.jsonl")
     assert len(rows) == 1 and rows[0]["violations"]
     assert [a["attempt"] for a in rows[0]["attempts"]] == [1, 2]
+    # the original reply survives next to the rebuilt surface (labels, preamble, tags)
+    for a in rows[0]["attempts"]:
+        assert a["raw"] == bad
+        assert a["raw"] != a["surface"]
+
+
+def test_an_extension_floor_violation_keeps_the_raw_reply(tmp_path):
+    import time
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    src = tmp_path / "j.jsonl"
+    src.write_text("{}\n")
+    t = time.mktime((2026, 8, 20, 12, 0, 0, 0, 0, -1))
+    os.utime(src, (t, t))
+    d._current_source = str(src)
+    from tests.test_extend_continue import OLD
+    c = {"extends": OLD,"extends_why": "adds",
+         "evidence": [{"class": "USER", "text": "move it tonight"}],
+         "classes": ["USER"], "kind": "project"}
+    raw = "Here you go.\nSECTION: notes\nBODY:\nnew fact, 9999 GB of it\n"
+    d.scribe = lambda task, u, max_tokens=0: raw       # type: ignore[method-assign]
+    obs: list = []
+    assert d._compose_extension(c, observations=obs) is None
+    assert obs[0]["raw"] == raw and obs[0]["raw"] != obs[0]["surface"]
 
 
 def test_a_good_scribe_leaves_no_rejection(tmp_path):
