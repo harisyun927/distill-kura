@@ -269,6 +269,7 @@ class Distiller:
         # `writes=False` is a Distiller built to LOOK (a dry run): it makes nothing on
         # the store it is handed. Watermarks / Seeds already defer their directories
         # to the first write; this is the one directory the constructor made itself.
+        self.writes = writes
         if writes:
             os.makedirs(self.drafts_dir, exist_ok=True)
         self._store_text: str | None = None
@@ -304,7 +305,13 @@ class Distiller:
     # ── the record of what was thrown away (observation only) ─────────────
     def _record_rejected(self, name: str, rec: dict) -> None:
         """Append one line to `_still/<name>`. Observation only: nothing reads it back
-        and no verdict depends on it, so a failure to write must never change a run."""
+        and no verdict depends on it, so a failure to write must never change a run.
+
+        It is still a write into the store's `_still`, so it asks the policy like every
+        other writer (AGENTS.md): a frozen store, or a Distiller built to look
+        (`writes=False`), records nothing."""
+        if not self.writes or self.store.write_policy == FROZEN:
+            return
         try:
             with open(os.path.join(self.still, name), "a", encoding="utf-8") as f:
                 f.write(json.dumps({**rec, "at": datetime.now(timezone.utc).isoformat()},
@@ -1687,8 +1694,9 @@ class Distiller:
             self._current_key = rec.get("key", "")
             self._current_source = rec.get("path", "")
             fails: list[str] = []
+            obs: list[dict] = []
             try:
-                d = self.compose(c, None, fails)
+                d = self.compose(c, None, fails, obs)
             except Exception as ex:
                 d, fails = None, fails + [f"{type(ex).__name__}: {ex}"]
             if d:
@@ -1701,6 +1709,13 @@ class Distiller:
                 # The scribe answered and the answer did not hold: a quality verdict,
                 # and repeating it forever would be a loop, not a retry.
                 _log("      ✗ the shelved candidate still does not keep the shape — dropped")
+                self._record_rejected("rejected.jsonl", {
+                    "source_key": rec.get("key", ""),
+                    "source": os.path.basename(rec.get("path", "") or ""),
+                    "candidate": {k: v for k, v in c.items() if k != "evidence"},
+                    "evidence": c.get("evidence"),
+                    "attempts": obs, "from_shelf": True,
+                    "violations": [v for o in obs for v in o.get("violations", [])]})
                 self.pending_compose.drop(fp)
                 continue
             self.pending_compose.save(

@@ -93,3 +93,56 @@ def test_an_empty_list_is_not_a_bad_reply(tmp_path):
     found, failure = d.spot_checked([Segment("USER", "hello")])
     assert found == [] and failure is None
     assert _read(d, "bad_replies.jsonl") == []
+
+
+def _scribe_down_then_prose(tmp_path, prose):
+    """Shelve one candidate (the scribe raises), then let the scribe answer badly."""
+    journal(str(tmp_path / "journals" / "a.jsonl"), LINES)
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    script(d, {"deserves to become a permanent memory": SPOT})
+
+    def down(task, user, max_tokens=0):
+        raise OSError("scribe unreachable")
+    d.scribe = down                                  # type: ignore[method-assign]
+    d.novelty = lambda c, near: ("NEW", "", None)   # type: ignore[method-assign]
+    r = d.run(chunks=1)
+    assert len(d.pending_compose.load()) == 1 and _read(d, "rejected.jsonl") == []
+    d.scribe = lambda task, user, max_tokens=0: prose   # type: ignore[method-assign]
+    return d
+
+
+def test_a_shelved_candidate_that_fails_on_retry_is_recorded(tmp_path):
+    prose = "Sure! Here is the memory you asked for, in plain prose with no fields."
+    d = _scribe_down_then_prose(tmp_path, prose)
+    out = d._work_pending()
+    assert not out["drafts"] and d.pending_compose.load() == []   # verdict unchanged: dropped
+    rows = _read(d, "rejected.jsonl")
+    assert len(rows) == 1
+    assert rows[0]["candidate"]["topic"] == "archive-mirror" and rows[0]["from_shelf"] is True
+    assert rows[0]["evidence"] and rows[0]["attempts"][0]["surface"] == prose
+
+
+def test_a_frozen_store_gets_no_record(tmp_path):
+    from distill_kura.distill.sources import Segment
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    os.makedirs(d.still, exist_ok=True)
+    store.write_policy = "frozen"
+    long_prose = "I read the material and here is my summary. " * 40
+    script(d, {"deserves to become a permanent memory": long_prose})
+    found, failure = d.spot_checked([Segment("USER", "put the archive on the slow disk")])
+    assert found == [] and failure["reason"] == "bad_reply"     # verdict unchanged
+    d._record_rejected("rejected.jsonl", {"x": 1})
+    assert _read(d, "bad_replies.jsonl") == [] and _read(d, "rejected.jsonl") == []
+
+
+def test_a_dry_run_distiller_gets_no_record(tmp_path):
+    from distill_kura.distill.sources import Segment
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store, writes=False)
+    os.makedirs(d.still, exist_ok=True)              # `_still` already exists
+    script(d, {"deserves to become a permanent memory": "prose " * 60})
+    d.spot_checked([Segment("USER", "hello there")])
+    d._record_rejected("rejected.jsonl", {"x": 1})
+    assert _read(d, "bad_replies.jsonl") == [] and _read(d, "rejected.jsonl") == []
