@@ -269,6 +269,7 @@ class Distiller:
         # `writes=False` is a Distiller built to LOOK (a dry run): it makes nothing on
         # the store it is handed. Watermarks / Seeds already defer their directories
         # to the first write; this is the one directory the constructor made itself.
+        self.writes = writes
         if writes:
             os.makedirs(self.drafts_dir, exist_ok=True)
         self._store_text: str | None = None
@@ -301,6 +302,23 @@ class Distiller:
                                                for sl in self.store.slugs()))
         return self._store_text
 
+    # ── the record of what was thrown away (observation only) ─────────────
+    def _record_rejected(self, name: str, rec: dict) -> None:
+        """Append one line to `_still/<name>`. Observation only: nothing reads it back
+        and no verdict depends on it, so a failure to write must never change a run.
+
+        It is still a write into the store's `_still`, so it asks the policy like every
+        other writer (AGENTS.md): a frozen store, or a Distiller built to look
+        (`writes=False`), records nothing."""
+        if not self.writes or self.store.write_policy == FROZEN:
+            return
+        try:
+            with open(os.path.join(self.still, name), "a", encoding="utf-8") as f:
+                f.write(json.dumps({**rec, "at": datetime.now(timezone.utc).isoformat()},
+                                   ensure_ascii=False) + "\n")
+        except Exception as ex:
+            _log(f"      · could not record {name}: {type(ex).__name__}: {ex}")
+
     # ── ② spot ───────────────────────────────────────────────────────────
     def spot(self, segs: list[Segment], max_items: int | None = None) -> list[dict]:
         """The candidates only. A caller that must tell "the brain said nothing here"
@@ -329,6 +347,12 @@ class Distiller:
                         "detail": detail}
         found = salvage(raw)[:limit]
         if not found and not _is_empty_list(raw):
+            # The failure keeps only the head (it rides the shelf); the whole reply is
+            # recorded here so the shape of what the brain said can be read later.
+            self._record_rejected("bad_replies.jsonl", {
+                "source_key": getattr(self, "_current_key", ""),
+                "source": os.path.basename(getattr(self, "_current_source", "") or ""),
+                "reply_chars": len(raw), "reply": raw})
             return [], {"reason": "bad_reply", "detail": raw.strip()[:200]}
         # A second look, told what the first one already took. One pass optimises for the
         # most striking thing in the batch; the audit asks what it walked past.
@@ -511,7 +535,8 @@ class Distiller:
 
     # ── ⑤ compose ────────────────────────────────────────────────────────
     def compose(self, c: dict, near: dict | None = None,
-                failures: list[str] | None = None) -> dict | None:
+                failures: list[str] | None = None,
+                observations: list[dict] | None = None) -> dict | None:
         """`near` is the recall the caller already paid for. run() asks the thinker
         once per candidate, for novelty; composing asked again with the same question
         and got the same answer — two model calls for one fact. A caller that has it
@@ -521,7 +546,7 @@ class Distiller:
         to it, so `None` with an empty list stays what it always was — a verdict on the
         answer — and `None` with a reason in it is a candidate worth keeping."""
         return self._compose_with_call(c, near, failures, self.scribe,
-                                       self.models.scribe)
+                                       self.models.scribe, observations=observations)
 
     def _scribe_endpoint(self, endpoint, task: str, user: str,
                          max_tokens: int = 1400) -> str | None:
@@ -638,7 +663,8 @@ class Distiller:
                                            allowed=cont, known_slugs=topology)
             if observations is not None:
                 observations.append({"attempt": attempt, "shape": False,
-                                     "surface": surface, "violations": list(bad)})
+                                     "surface": surface, "raw": out,
+                                     "violations": list(bad)})
             if not bad:
                 break
             if attempt == 2:
@@ -769,7 +795,7 @@ class Distiller:
             observations.append({"attempt": 1, "shape": False,
                                  "surface": "\n".join([head, plain, " ".join(s_ann.values()),
                                                         cand_ann]),
-                                 "violations": list(bad)})
+                                 "raw": out or "", "violations": list(bad)})
         if bad:
             _log(f"      ✗ extension surface fails the floor: {bad}")
             return None
@@ -1579,13 +1605,14 @@ class Distiller:
             t1 = time.time()
             def _one(cn):
                 fails: list[str] = []
+                obs: list[dict] = []     # what each scribe attempt said and which floors it hit
                 try:
-                    return cn[0], self.compose(cn[0], cn[1], fails), fails
+                    return cn[0], self.compose(cn[0], cn[1], fails, obs), fails, obs
                 except Exception as ex:      # a transport fact, not a verdict
-                    return cn[0], None, fails + [f"{type(ex).__name__}: {ex}"]
+                    return cn[0], None, fails + [f"{type(ex).__name__}: {ex}"], obs
 
             with ThreadPoolExecutor(max_workers=self.slots) as pool:
-                for c, d, fails in pool.map(_one, to_write):
+                for c, d, fails, obs in pool.map(_one, to_write):
                     if not d and fails:
                         # The scribe was unreachable. The journal behind this candidate
                         # is past the mark, so the candidate and its evidence packet are
@@ -1601,6 +1628,12 @@ class Distiller:
                         continue
                     if not d:
                         _log("      the scribe did not keep the shape")
+                        self._record_rejected("rejected.jsonl", {
+                            "source_key": key, "source": os.path.basename(path),
+                            "candidate": {k: v for k, v in c.items() if k != "evidence"},
+                            "evidence": c.get("evidence"),
+                            "attempts": obs,
+                            "violations": [v for o in obs for v in o.get("violations", [])]})
                         continue
                     _log(f"      wrote {d['slug']} → {os.path.basename(self.stage(d, path))}")
                     made.append(d["slug"])
@@ -1662,8 +1695,9 @@ class Distiller:
             self._current_key = rec.get("key", "")
             self._current_source = rec.get("path", "")
             fails: list[str] = []
+            obs: list[dict] = []
             try:
-                d = self.compose(c, None, fails)
+                d = self.compose(c, None, fails, obs)
             except Exception as ex:
                 d, fails = None, fails + [f"{type(ex).__name__}: {ex}"]
             if d:
@@ -1676,6 +1710,13 @@ class Distiller:
                 # The scribe answered and the answer did not hold: a quality verdict,
                 # and repeating it forever would be a loop, not a retry.
                 _log("      ✗ the shelved candidate still does not keep the shape — dropped")
+                self._record_rejected("rejected.jsonl", {
+                    "source_key": rec.get("key", ""),
+                    "source": os.path.basename(rec.get("path", "") or ""),
+                    "candidate": {k: v for k, v in c.items() if k != "evidence"},
+                    "evidence": c.get("evidence"),
+                    "attempts": obs, "from_shelf": True,
+                    "violations": [v for o in obs for v in o.get("violations", [])]})
                 self.pending_compose.drop(fp)
                 continue
             self.pending_compose.save(
