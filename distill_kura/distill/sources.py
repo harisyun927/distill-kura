@@ -275,7 +275,10 @@ class ClaudeCodeSource(Source):
                 # classed [USER] it would be the human's own words, and "the owner
                 # approved X" in a delegation prompt would pass the gate as a decision.
                 # Tool results stay [TOOL]; everything else in a sidechain is [SELF].
-                side = bool(d.get("isSidechain"))
+                # A continued-session summary (`isCompactSummary: true`) is also written
+                # as `type: user`, but the model wrote it: it is no more the human's
+                # than a sidechain prompt is.
+                side = bool(d.get("isSidechain")) or bool(d.get("isCompactSummary"))
                 msg = d.get("message")
                 c = msg.get("content") if isinstance(msg, dict) else None
                 parts = c if isinstance(c, list) else ([c] if isinstance(c, str) else [])
