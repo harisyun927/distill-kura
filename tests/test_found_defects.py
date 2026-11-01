@@ -41,6 +41,27 @@ def test_a_sidechain_user_line_is_the_parent_models_prompt_not_the_human(tmp_pat
     assert by["a real human line in the same file"] == "USER"                   # untouched
 
 
+def test_a_compact_summary_line_is_the_models_text_not_the_human(tmp_path):
+    """#710 PR-2: a continued session opens with the model's own summary, recorded as
+    `type: user` + `isCompactSummary: true`. It must not become [USER]."""
+    p = tmp_path / "s.jsonl"
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "user", "isCompactSummary": True, "message": {"content": [
+            {"type": "text", "text": "Summary: the owner decided to move the archive"}]}}) + "\n")
+        f.write(json.dumps({"type": "user", "isCompactSummary": True, "message": {
+            "content": "string-form summary: the owner approved it"}}) + "\n")
+        f.write(json.dumps({"type": "user", "isCompactSummary": False, "message": {"content": [
+            {"type": "text", "text": "a real human line"}]}}) + "\n")
+        f.write(json.dumps({"type": "user", "message": {"content": [
+            {"type": "text", "text": "a human line without the flag"}]}}) + "\n")
+    segs, _ = ClaudeCodeSource().sip(str(p), 0, 10_000)
+    by = {s.text: s.cls for s in segs}
+    assert by["Summary: the owner decided to move the archive"] == "SELF"
+    assert by["string-form summary: the owner approved it"] == "SELF"
+    assert by["a real human line"] == "USER"
+    assert by["a human line without the flag"] == "USER"
+
+
 # ── 2. tidy writes the index under the lock, atomically ──────────────────
 
 def test_tidy_replaces_the_index_atomically_under_the_lock(tmp_path, monkeypatch):
