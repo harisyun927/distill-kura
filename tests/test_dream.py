@@ -207,6 +207,44 @@ def test_frozen_store_gets_no_proposals_file(tmp_path):
     assert not os.path.exists(os.path.join(st.still, "dream-proposals.jsonl.tmp"))
 
 
+def test_a_store_swapped_for_a_symlink_gets_no_proposals_file(tmp_path, monkeypatch):
+    """Codex P2 on distill-kura#8: a Store opened on `scratch`, then `scratch` swapped
+    for a symlink to another (frozen) store's directory. The policy on the object is
+    still scratch's, so the frozen check alone let one slug-less wrong score write
+    `_still/` and its lock into the other store. Refused like every other write door
+    (`_substitution_refusal`), before any directory or lock is made."""
+    import pytest
+    (tmp_path / "frozen").mkdir()
+    (tmp_path / "scratch").mkdir()
+    st = Store(name="scratch", path=str(tmp_path / "scratch"))
+    os.rmdir(tmp_path / "scratch")
+    try:
+        os.symlink(tmp_path / "frozen", tmp_path / "scratch", target_is_directory=True)
+    except (OSError, NotImplementedError) as e:
+        # Windows without Developer Mode / SeCreateSymbolicLinkPrivilege: a directory
+        # junction needs no privilege and realpath() follows it the same way.
+        try:
+            import _winapi
+            _winapi.CreateJunction(str(tmp_path / "frozen"), str(tmp_path / "scratch"))
+        except (ImportError, OSError, AttributeError):
+            pytest.skip(f"os.symlink is not permitted here and no junction either: {e}")
+    scores = jl(tmp_path / "scores.jsonl", [{"id": "w1", "verdict": "wrong"}])
+    utter = jl(tmp_path / "utter.jsonl", [])
+    with pytest.raises(ValueError, match="no longer resolves"):
+        propose(st, scores, utter, None, "2026-11-08")
+    # the CLI door: the same refusal, a non-zero exit
+    from distill_kura import cli
+    monkeypatch.setattr(cli, "_store", lambda reg, sel: st)
+    cfg = tmp_path / "kura.toml"
+    cfg.write_text(f'[stores.m]\npath = "{(tmp_path / "frozen").as_posix()}"\n',
+                   encoding="utf-8")
+    with pytest.raises(SystemExit) as ex:
+        main(["-c", str(cfg), "-s", "m", "dream-propose", "--scores", scores,
+              "--utter", utter])
+    assert ex.value.code not in (0, None) and "no longer resolves" in str(ex.value.code)
+    assert os.listdir(tmp_path / "frozen") == []      # no _still, no lock, no tmp
+
+
 def test_long_quote_is_kept_whole(tmp_path):
     st, scores, cases, utter = fixture(tmp_path)
     long_q = "一行目の言葉です\n二行目の言葉です\n三行目の言葉です\n四行目の言葉です"

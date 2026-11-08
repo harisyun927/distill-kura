@@ -26,7 +26,7 @@ import os
 import tempfile
 from datetime import date as _date
 
-from .store import FROZEN, Store, write_slug
+from .store import Store, write_slug
 
 FILE = "dream-proposals.jsonl"
 LOCK = "dream-proposals.lock"
@@ -180,13 +180,22 @@ def _proposal(day: str, score: dict, slug: str, case: dict, store: Store,
             "status": "pending"}
 
 
+def _refuse_write(store: Store) -> None:
+    """Raise with the store's own refusal: `_frozen_refused` then
+    `_substitution_refusal`, the helpers every other write door asks."""
+    for check in (store._frozen_refused, store._substitution_refusal):
+        if (r := check()) is not None:
+            raise ValueError(r["error"])
+
+
 def propose(store: Store, scores_path: str, utter_path: str,
             cases_path: str | None = None, day: str | None = None) -> dict:
     """Write proposals for every wrong/stale score; return what happened."""
     # Every write to a store goes through its policy first, the _still workshop file
-    # included (AGENTS.md): checked before any directory or temp file is made.
-    if getattr(store, "write_policy", None) == FROZEN:
-        raise ValueError(f"store '{store.name}' is frozen: nothing may write")
+    # included (AGENTS.md): the same checks, in the same order, as the store's own
+    # write doors (`retire`, `_write`) — frozen, then the directory still being the one
+    # the Store was opened on — before any directory, lock or temp file is made.
+    _refuse_write(store)
     day = day or _date.today().isoformat()
     scores = [s for s in _read_jsonl(scores_path) if s.get("verdict") in VERDICTS]
     cases = {c.get("id"): c for c in _read_jsonl(cases_path)} if cases_path else {}
@@ -207,6 +216,7 @@ def propose(store: Store, scores_path: str, utter_path: str,
     keys = {(p["case_id"], p["slug"]) for p in new}
     kept = []
     if new:
+        _refuse_write(store)       # again at the door: the swap can land mid-run
         with _locked(store.still):
             if os.path.exists(path):
                 kept = [p for p in _read_jsonl(path)
