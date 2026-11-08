@@ -695,3 +695,23 @@ rejections up AND `gated_kept` down against the previous window —
 
 It is a gauge, not a gate: exit code stays 0, and a human decides what the
 pattern means.
+
+
+## Night repair proposals (`kura dream-propose`)
+
+When a person has scored memories with kura-audit (`scores.jsonl`, verdicts `wrong`
+/ `stale`), the night can draft the repairs — never make them:
+
+```bash
+kura -s main dream-propose --scores scores.jsonl --cases cases.jsonl --utter utter.jsonl
+```
+
+One line per (case, slug) lands in `_still/dream-proposals.jsonl`: `kind` is
+`annotate` (stale — the ruling was overturned) or `replace` (wrong), `proposed` is the
+scored answer plus the memory line that disagrees, and `evidence` quotes the person's
+words verbatim from the kura-audit utterance index (`source` = conversation file:line).
+A score whose quote is not found verbatim becomes `kind: needs-human` with a `reason`
+and no proposal. Re-running replaces that case's `pending` line; lines moved off
+`pending` by a person are kept. No model is called, and nothing else in the store is
+written — applying a proposal is a person's act (back the store up first). Exit 2
+means there was no wrong/stale score to propose for.
