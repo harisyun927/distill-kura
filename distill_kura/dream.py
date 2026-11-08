@@ -23,11 +23,10 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import re
 import tempfile
 from datetime import date as _date
 
-from .store import FROZEN, Store
+from .store import FROZEN, Store, write_slug
 
 FILE = "dream-proposals.jsonl"
 LOCK = "dream-proposals.lock"
@@ -112,10 +111,16 @@ def _disagreeing_line(body: str, traps: list[str]) -> str | None:
 def _successor_slug(old: str, day: str, case_id, store: Store, taken: set[str]) -> str:
     """`<old>-<day>-<case id>`, so two cases on one memory on one day never share a
     successor (applying both would have the second overwrite the first). If that name is
-    already a memory in the store, or was handed out earlier in this run, add -2, -3 …"""
-    cid = re.sub(r"[^a-z0-9]+", "-", str(case_id or "").lower()).strip("-")
-    base = f"{old}-{day}" + (f"-{cid}" if cid else "")
-    existing = store.slug_set()
+    already a memory in the store, or was handed out earlier in this run, add -2, -3 …
+
+    The whole name goes through `write_slug` — the rule `kura remember` stores by —
+    BEFORE the collision check and before it is written out: `_study/old` would
+    otherwise be proposed as `_study/old-…` but stored as `study-old-…`, and the
+    `kura retire` that follows would find no memory of the proposed name. Collisions
+    are judged case-insensitively, since a file system may be."""
+    cid = write_slug(str(case_id or ""))
+    base = write_slug(f"{old}-{day}" + (f"-{cid}" if cid else ""))
+    existing = {s.lower() for s in store.slug_set()}
     slug, n = base, 1
     while slug in existing or slug in taken:
         n += 1

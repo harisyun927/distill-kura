@@ -714,7 +714,7 @@ conversation file:line). `kind` is one of three:
 - `supersede` — stale (the ruling was overturned) and wrong (written down wrongly)
   alike, whenever the case carries an `answer`. A memory is never rewritten in place;
   the old one stays as history. `proposed` is
-  `{"new_memory": {"slug": "<old-slug>-<YYYY-MM-DD>-<case_id>" (-2, -3 … is added if that name is already a memory), "title": "<answer, one line>",
+  `{"new_memory": {"slug": "<old-slug>-<YYYY-MM-DD>-<case_id>" (-2, -3 … is added if that name is already a memory; the whole name is normalised by the store's write rule — lowercase, other characters → `-` — before the check, so `_study/old` gets `study-old-…`, the name `kura remember` will really store), "title": "<answer, one line>",
   "body": "正: <answer>。 + the verbatim quotes with their source + the case_id"},
   "retire_old": "<old-slug>", "why": "<the old memory's line that disagrees + the
   scorer's note>"}`. A person applies it with `kura remember` (the new memory) and then

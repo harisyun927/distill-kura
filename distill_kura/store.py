@@ -59,6 +59,14 @@ def is_memory_file(name: str) -> bool:
             and name not in RESERVED and name[:-3].upper() != "MEMORY")
 
 
+def write_slug(name: str) -> str:
+    """The name `_write` stores a memory under: lowercased, every run of other characters
+    turned into one `-`, ends trimmed. Asked in ONE place so a caller that hands a name to
+    `kura remember` (dream-propose's successor slug) can know the name it will really get
+    — `_study/old` is stored as `study-old`, and `retire` only finds the stored name."""
+    return re.sub(r"[^a-z0-9-]+", "-", (name or "").lower()).strip("-")
+
+
 class InvalidSlug(ValueError):
     """A name that does not designate a memory in this store."""
 
@@ -1232,7 +1240,7 @@ class Store:
         Policy is checked by the callers above; this is the mechanism only."""
         if (r := self._substitution_refusal()):
             return r
-        slug = re.sub(r"[^a-z0-9-]+", "-", slug.lower()).strip("-")
+        slug = write_slug(slug)
         if not slug:
             return {"ok": False, "error": "slug required"}
         if not is_memory_file(f"{slug}.md"):

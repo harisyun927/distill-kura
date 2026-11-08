@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from distill_kura.cli import main          # noqa: E402
 from distill_kura import dream             # noqa: E402
 from distill_kura.dream import propose     # noqa: E402
-from distill_kura.store import Store       # noqa: E402
+from distill_kura.store import Store, write_slug  # noqa: E402
 
 KEYS = {"date", "case_id", "verdict", "slug", "kind", "proposed", "evidence", "status"}
 
@@ -264,3 +264,59 @@ def test_successor_slug_that_exists_gets_a_numeric_suffix(tmp_path):
     propose(st, scores, utter, cases, "2026-11-08")
     p = {r["case_id"]: r for r in rows(st)}["o03"]
     assert p["proposed"]["new_memory"]["slug"] == "labor-cost-2026-11-08-o03-2"
+
+
+def _study_case(tmp_path, old_name):
+    """A long-form `_study/<old_name>` memory and one wrong case on it."""
+    st, _, _, utter = fixture(tmp_path)
+    d = tmp_path / "m" / "_study"
+    d.mkdir(exist_ok=True)
+    (d / f"{old_name}.md").write_text(
+        "---\nname: old\ndescription: 人件費の古い記録\n---\n息子のバイト代は賀陽住研の人件費。\n",
+        encoding="utf-8")
+    old = f"_study/{old_name}"
+    assert st.read_exact(old)
+    scores = jl(tmp_path / "s3.jsonl", [
+        {"id": "C1", "type": "overturn", "verdict": "wrong", "slugs": [old]}])
+    cases = jl(tmp_path / "c3.jsonl", [
+        {"id": "C1", "traps": ["賀陽住研"], "answer": "カタクル",
+         "quote": ["あれ何回も言ってますけど、カタクルで"]}])
+    propose(st, scores, utter, cases, "2026-11-08")
+    (p,) = [r for r in rows(st) if r["case_id"] == "C1"]
+    return st, old, p
+
+
+def _applies_as_proposed(st, p, old):
+    new = p["proposed"]["new_memory"]["slug"]
+    # the name `kura remember` will store it under is the name proposed …
+    assert write_slug(new) == new
+    st.remember(new, "後継", p["proposed"]["new_memory"]["body"])
+    # … so `kura retire` finds both the new memory and the old one by the proposed names
+    assert st.resolve_exact(new) == new
+    assert p["proposed"]["retire_old"] == old
+    assert st.resolve_exact(old) == old
+    return new
+
+
+def test_study_memory_successor_is_the_name_the_store_writes(tmp_path):
+    st, old, p = _study_case(tmp_path, "old")
+    assert p["kind"] == "supersede"
+    assert _applies_as_proposed(st, p, old) == "study-old-2026-11-08-c1"
+
+
+def test_successor_of_a_name_with_capitals_and_spaces_is_normalised_too(tmp_path):
+    st, old, p = _study_case(tmp_path, "Old Note")
+    assert _applies_as_proposed(st, p, old) == "study-old-note-2026-11-08-c1"
+
+
+def test_successor_collision_is_judged_on_the_normalised_name(tmp_path):
+    st, old, _ = _study_case(tmp_path, "old")
+    st.remember("study-old-2026-11-08-c1", "既存", "既にある記憶")
+    scores = jl(tmp_path / "s4.jsonl", [
+        {"id": "C1", "type": "overturn", "verdict": "wrong", "slugs": [old]}])
+    cases = jl(tmp_path / "c4.jsonl", [
+        {"id": "C1", "traps": ["賀陽住研"], "answer": "カタクル",
+         "quote": ["あれ何回も言ってますけど、カタクルで"]}])
+    propose(st, scores, str(tmp_path / "utter.jsonl"), cases, "2026-11-08")
+    (p,) = [r for r in rows(st) if r["case_id"] == "C1"]
+    assert p["proposed"]["new_memory"]["slug"] == "study-old-2026-11-08-c1-2"
