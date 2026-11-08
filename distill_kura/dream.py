@@ -8,7 +8,10 @@ utter.jsonl) as the evidence. Applying a proposal is a person's act in the morni
 nothing here touches a memory, the index or anything outside that one file.
 
 No model call (v0): the proposal is the scored answer, the verbatim quote that backs it,
-and the line of the memory that disagrees — enough to decide by. A proposal whose quote
+and the line of the memory that disagrees — enough to decide by. A memory is never
+proposed to be rewritten in place: with a scored answer the proposal is `supersede` (a
+new memory's draft plus "retire the old one as superseded by it"), and with only the
+person's words and no answer it is `annotate` (a note plus the quote). A proposal whose quote
 cannot be found is not written as a proposal at all; it becomes `needs-human` with the
 reason, because a repair without the person's words behind it is a guess.
 
@@ -124,19 +127,34 @@ def _proposal(day: str, score: dict, slug: str, case: dict, store: Store,
     evidence = find_evidence(quotes, utter)
     if not evidence:
         return human("none of the case's quotes was found verbatim in the utterance index")
-    answer = str(case.get("answer") or "").strip()
+    answer = " ".join(str(case.get("answer") or "").split())
     _, body = Store._split(text)
     where = _disagreeing_line(body, _as_list(case.get("traps")))
     differs = f"本文の該当行: 「{where}」" if where else "本文の該当行: 特定できず（採点メモを見る）"
     note = str(score.get("note") or "").strip()
-    if score["verdict"] == "stale":
-        kind = "annotate"
-        proposed = f"覆り: 今の裁定は「{answer}」。{differs}。この記憶は覆り前のまま。"
+    why = differs + (f"（採点メモ: {note}）" if note else "")
+    quoted = "\n".join(f"「{e['quote']}」（{e['source']}）" for e in evidence)
+    if answer:
+        # stale and wrong alike: the old memory is never rewritten in place. A new
+        # memory carries the right answer and the old one is marked superseded by it,
+        # so the history stays (`kura remember` then `kura retire`, by a person).
+        kind = "supersede"
+        proposed = {
+            "new_memory": {
+                "slug": f"{slug}-{day}",
+                "title": answer,
+                "body": f"正: {answer}。\n原文:\n{quoted}\n出典: kura-audit case "
+                        f"{score.get('id')}",
+            },
+            "retire_old": slug,
+            "why": why,
+        }
     else:
-        kind = "replace"
-        proposed = f"正: {answer}。{differs} を置き換える。"
-    if note:
-        proposed += f"（採点メモ: {note}）"
+        # no right answer written in the case, only the person's words: a note on the
+        # old memory with the quote, never a guessed replacement.
+        kind = "annotate"
+        proposed = {"note": f"この記憶は人の言葉と食い違う（{score['verdict']}）。{why}",
+                    "quote": quoted}
     return {**base, "kind": kind, "proposed": proposed, "evidence": evidence,
             "status": "pending"}
 

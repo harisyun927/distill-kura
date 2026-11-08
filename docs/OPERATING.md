@@ -706,12 +706,36 @@ When a person has scored memories with kura-audit (`scores.jsonl`, verdicts `wro
 kura -s main dream-propose --scores scores.jsonl --cases cases.jsonl --utter utter.jsonl
 ```
 
-One line per (case, slug) lands in `_still/dream-proposals.jsonl`: `kind` is
-`annotate` (stale — the ruling was overturned) or `replace` (wrong), `proposed` is the
-scored answer plus the memory line that disagrees, and `evidence` quotes the person's
-words verbatim from the kura-audit utterance index (`source` = conversation file:line).
-A score whose quote is not found verbatim becomes `kind: needs-human` with a `reason`
-and no proposal. Re-running replaces that case's `pending` line; lines moved off
+One line per (case, slug) lands in `_still/dream-proposals.jsonl`
+(`{date, case_id, verdict, slug, kind, proposed, evidence, status}`), and `evidence`
+quotes the person's words verbatim from the kura-audit utterance index (`source` =
+conversation file:line). `kind` is one of three:
+
+- `supersede` — stale (the ruling was overturned) and wrong (written down wrongly)
+  alike, whenever the case carries an `answer`. A memory is never rewritten in place;
+  the old one stays as history. `proposed` is
+  `{"new_memory": {"slug": "<old-slug>-<YYYY-MM-DD>", "title": "<answer, one line>",
+  "body": "正: <answer>。 + the verbatim quotes with their source + the case_id"},
+  "retire_old": "<old-slug>", "why": "<the old memory's line that disagrees + the
+  scorer's note>"}`. A person applies it with `kura remember` (the new memory) and then
+  `kura retire <old> <new> --manifest …` (old marked superseded by new).
+- `annotate` — only when the case has the person's quote but no `answer`: `proposed` is
+  `{"note": "<why it disagrees>", "quote": "<the verbatim quotes with their source>"}`,
+  a note to add to the old memory, never a guessed replacement.
+- `needs-human` — the quote is not found verbatim (or the memory / case is missing):
+  a `reason` and no proposal.
+
+Re-measuring (the number this is for). A proposal's `case_id` is the `id` of the same
+kura-audit `cases.jsonl` that life-meta's `tools/kura-audit/recall_check.py` reads
+(life-meta `tools/kura-audit/README.md`). After a person applies a proposal
+(OK → `remember` / `retire`), look at the next night's recall_check ledger: did that
+`case_id`'s verdict move from `wrong` / `miss` to `correct`? The per-type rates are in
+`<ledger name>.rates.jsonl` next to the ledger; the night before and the night after
+are the before/after comparison. recall_check counts a case `correct` when one of the
+case's `slugs` is picked, so when a `supersede` is applied, add the new memory's slug to
+that case's `slugs` in `cases.jsonl` too — otherwise the fixed memory is scored `miss`.
+
+Re-running replaces that case's `pending` line; lines moved off
 `pending` by a person are kept. No model is called, and nothing else in the store is
 written — applying a proposal is a person's act (back the store up first). Exit 2
 means there was no wrong/stale score to propose for. A `frozen` store is refused before

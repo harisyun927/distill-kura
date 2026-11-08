@@ -1,5 +1,7 @@
 """`kura dream-propose` (life-meta#1363 PR-2), pinned on a small fixture: a stale and a
-wrong score become proposals in the fixed line shape with verbatim evidence; a score
+wrong score become proposals in the fixed line shape with verbatim evidence — both as
+`supersede` (a new memory plus "retire the old"), and `annotate` only when the case has
+no answer; a score
 whose quote is nowhere in the utterance index becomes `needs-human`; running twice
 does not grow the file; a line a person moved off `pending` survives; and nothing but
 `_still/dream-proposals.jsonl` is written. No model, no network.
@@ -70,14 +72,57 @@ def test_proposals_take_the_fixed_shape_with_verbatim_evidence(tmp_path):
     for p in (stale, wrong):
         assert set(p) == KEYS and p["status"] == "pending" and p["date"] == "2026-11-08"
         assert p["evidence"] and set(p["evidence"][0]) == {"source", "quote"}
-    assert stale["kind"] == "annotate" and stale["slug"] == "market-calendar"
+    assert stale["slug"] == "market-calendar"
     assert stale["evidence"][0] == {
         "source": "conv-a.jsonl:4",
         "quote": "共有カレンダーもう1個作って、色変えた方が分かりやすいと思う"}
-    assert "市場用に別カレンダーを作る" in stale["proposed"]
-    assert "市場の予定は営業カレンダーに入れる。" in stale["proposed"]  # where it differs
-    assert wrong["kind"] == "replace" and wrong["verdict"] == "wrong"
+    assert wrong["verdict"] == "wrong"
     assert wrong["evidence"][0]["quote"] == "あれ何回も言ってますけど、カタクルで。お願いします"
+
+
+def test_stale_becomes_a_new_memory_that_supersedes_the_old(tmp_path):
+    st, scores, cases, utter = fixture(tmp_path)
+    propose(st, scores, utter, cases, "2026-11-08")
+    p = {r["case_id"]: r for r in rows(st)}["d12"]
+    assert p["kind"] == "supersede"
+    assert set(p["proposed"]) == {"new_memory", "retire_old", "why"}
+    new = p["proposed"]["new_memory"]
+    assert new["slug"] == "market-calendar-2026-11-08"
+    assert new["title"] == "市場用に別カレンダーを作る"
+    assert new["body"].startswith("正: 市場用に別カレンダーを作る。")
+    assert "共有カレンダーもう1個作って、色変えた方が分かりやすいと思う" in new["body"]
+    assert "conv-a.jsonl:4" in new["body"] and "d12" in new["body"]
+    assert p["proposed"]["retire_old"] == "market-calendar"
+    assert "市場の予定は営業カレンダーに入れる。" in p["proposed"]["why"]  # where it differs
+    assert "10/8 の別カレンダーが無い" in p["proposed"]["why"]
+    # the old memory itself is untouched: no in-place rewrite is proposed or made
+    assert "営業カレンダーに入れる" in st.read_exact("market-calendar")
+
+
+def test_wrong_becomes_a_new_memory_that_supersedes_the_old(tmp_path):
+    st, scores, cases, utter = fixture(tmp_path)
+    propose(st, scores, utter, cases, "2026-11-08")
+    p = {r["case_id"]: r for r in rows(st)}["o03"]
+    assert p["kind"] == "supersede"
+    assert p["proposed"]["new_memory"]["slug"] == "labor-cost-2026-11-08"
+    assert p["proposed"]["new_memory"]["title"] == "カタクル"
+    assert "あれ何回も言ってますけど、カタクルで。お願いします" in p["proposed"]["new_memory"]["body"]
+    assert p["proposed"]["retire_old"] == "labor-cost"
+    assert "息子のバイト代は賀陽住研の人件費。" in p["proposed"]["why"]
+
+
+def test_no_answer_but_a_quote_is_annotate(tmp_path):
+    st, scores, _, utter = fixture(tmp_path)
+    cases = jl(tmp_path / "cases3.jsonl", [
+        {"id": "o03", "traps": ["賀陽住研"],
+         "quote": ["あれ何回も言ってますけど、カタクルで"]}])
+    propose(st, scores, utter, cases, "2026-11-08")
+    p = {r["case_id"]: r for r in rows(st)}["o03"]
+    assert p["kind"] == "annotate"
+    assert set(p["proposed"]) == {"note", "quote"}
+    assert "息子のバイト代は賀陽住研の人件費。" in p["proposed"]["note"]
+    assert "あれ何回も言ってますけど、カタクルで。お願いします" in p["proposed"]["quote"]
+    assert "conv-b.jsonl:9" in p["proposed"]["quote"]
 
 
 def test_no_evidence_is_needs_human_with_a_reason_only(tmp_path):
