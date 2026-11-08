@@ -17,13 +17,35 @@ lines a person already moved off `pending` are kept as they are.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import tempfile
 from datetime import date as _date
 
 from .store import FROZEN, Store
 
 FILE = "dream-proposals.jsonl"
+LOCK = "dream-proposals.lock"
+
+
+@contextlib.contextmanager
+def _locked(still: str):
+    """Hold an exclusive per-store lock for the whole read -> filter -> write ->
+    replace of the proposals file, so two dream-propose runs cannot lose a batch."""
+    os.makedirs(still, exist_ok=True)
+    with open(os.path.join(still, LOCK), "a") as fh:
+        try:
+            import fcntl
+        except ImportError:          # no flock on this platform
+            fcntl = None
+        if fcntl:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl:
+                fcntl.flock(fh, fcntl.LOCK_UN)
 VERDICTS = ("wrong", "stale")
 MIN_QUOTE = 6          # kura-audit's `short` rule: 「はい」 is not evidence of content
 
@@ -143,17 +165,24 @@ def propose(store: Store, scores_path: str, utter_path: str,
     path = os.path.join(store.still, FILE)
     keys = {(p["case_id"], p["slug"]) for p in new}
     kept = []
-    if os.path.exists(path):
-        kept = [p for p in _read_jsonl(path)
-                if not (p.get("status") == "pending"
-                        and (p.get("case_id"), p.get("slug")) in keys)]
     if new:
-        os.makedirs(store.still, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-            for p in kept + new:
-                fh.write(json.dumps(p, ensure_ascii=False) + "\n")
-        os.replace(tmp, path)
+        with _locked(store.still):
+            if os.path.exists(path):
+                kept = [p for p in _read_jsonl(path)
+                        if not (p.get("status") == "pending"
+                                and (p.get("case_id"), p.get("slug")) in keys)]
+            fd, tmp = tempfile.mkstemp(dir=store.still, prefix=FILE + ".", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                    for p in kept + new:
+                        fh.write(json.dumps(p, ensure_ascii=False) + "\n")
+                os.replace(tmp, path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
+    elif os.path.exists(path):
+        kept = _read_jsonl(path)
     kinds: dict[str, int] = {}
     for p in new:
         kinds[p["kind"]] = kinds.get(p["kind"], 0) + 1

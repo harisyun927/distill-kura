@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from distill_kura.cli import main          # noqa: E402
+from distill_kura import dream             # noqa: E402
 from distill_kura.dream import propose     # noqa: E402
 from distill_kura.store import Store       # noqa: E402
 
@@ -128,7 +129,8 @@ def test_only_the_proposals_file_is_written(tmp_path):
     propose(st, scores, utter, cases, "2026-11-08")
     after = snapshot()
     changed = {p for p in after if before.get(p) != after[p]} | (set(before) - set(after))
-    assert changed == {os.path.join(st.still, "dream-proposals.jsonl")}
+    assert changed == {os.path.join(st.still, "dream-proposals.jsonl"),
+                       os.path.join(st.still, "dream-proposals.lock")}
 
 
 def test_cli_exit_codes(tmp_path):
@@ -170,3 +172,29 @@ def test_long_quote_is_kept_whole(tmp_path):
     propose(st, scores, utter, cases, "2026-11-08")
     ev = [r for r in rows(st) if r["case_id"] == "d12"][0]["evidence"][0]["quote"]
     assert ev == long_q
+
+
+def test_proposals_are_read_and_written_inside_the_store_lock(tmp_path, monkeypatch):
+    import contextlib
+    st, scores, cases, utter = fixture(tmp_path)
+    log = []
+
+    @contextlib.contextmanager
+    def fake_lock(still):
+        log.append("enter")
+        try:
+            yield
+        finally:
+            log.append("exit")
+    monkeypatch.setattr(dream, "_locked", fake_lock)
+    real_read, real_replace = dream._read_jsonl, os.replace
+    monkeypatch.setattr(dream, "_read_jsonl",
+                        lambda p: (log.append("read:" + os.path.basename(p)), real_read(p))[1])
+    monkeypatch.setattr(dream.os, "replace",
+                        lambda a, b: (log.append("replace"), real_replace(a, b))[1])
+    propose(st, scores, utter, cases, "2026-11-08")
+    propose(st, scores, utter, cases, "2026-11-09")
+    second = log[len(log) - 1 - log[::-1].index("enter"):]
+    assert second[0] == "enter" and second[-1] == "exit"
+    assert "read:dream-proposals.jsonl" in second and "replace" in second
+    assert second.index("read:dream-proposals.jsonl") < second.index("replace") < len(second) - 1
