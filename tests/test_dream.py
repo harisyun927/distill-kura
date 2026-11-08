@@ -87,7 +87,7 @@ def test_stale_becomes_a_new_memory_that_supersedes_the_old(tmp_path):
     assert p["kind"] == "supersede"
     assert set(p["proposed"]) == {"new_memory", "retire_old", "why"}
     new = p["proposed"]["new_memory"]
-    assert new["slug"] == "market-calendar-2026-11-08"
+    assert new["slug"] == "market-calendar-2026-11-08-d12"
     assert new["title"] == "市場用に別カレンダーを作る"
     assert new["body"].startswith("正: 市場用に別カレンダーを作る。")
     assert "共有カレンダーもう1個作って、色変えた方が分かりやすいと思う" in new["body"]
@@ -104,7 +104,7 @@ def test_wrong_becomes_a_new_memory_that_supersedes_the_old(tmp_path):
     propose(st, scores, utter, cases, "2026-11-08")
     p = {r["case_id"]: r for r in rows(st)}["o03"]
     assert p["kind"] == "supersede"
-    assert p["proposed"]["new_memory"]["slug"] == "labor-cost-2026-11-08"
+    assert p["proposed"]["new_memory"]["slug"] == "labor-cost-2026-11-08-o03"
     assert p["proposed"]["new_memory"]["title"] == "カタクル"
     assert "あれ何回も言ってますけど、カタクルで。お願いします" in p["proposed"]["new_memory"]["body"]
     assert p["proposed"]["retire_old"] == "labor-cost"
@@ -243,3 +243,24 @@ def test_proposals_are_read_and_written_inside_the_store_lock(tmp_path, monkeypa
     assert second[0] == "enter" and second[-1] == "exit"
     assert "read:dream-proposals.jsonl" in second and "replace" in second
     assert second.index("read:dream-proposals.jsonl") < second.index("replace") < len(second) - 1
+
+
+def test_two_cases_on_one_memory_get_different_successor_slugs(tmp_path):
+    st, scores, cases, utter = fixture(tmp_path)
+    scores = jl(tmp_path / "s2.jsonl", [
+        {"id": "o05", "type": "overturn", "verdict": "wrong", "slugs": ["labor-cost"]},
+        {"id": "o06", "type": "overturn", "verdict": "stale", "slugs": ["labor-cost"]}])
+    cases = jl(tmp_path / "c2.jsonl", [
+        {"id": i, "traps": ["賀陽住研"], "answer": "カタクル",
+         "quote": ["あれ何回も言ってますけど、カタクルで"]} for i in ("o05", "o06")])
+    propose(st, scores, utter, cases, "2026-11-08")
+    slugs = [r["proposed"]["new_memory"]["slug"] for r in rows(st)]
+    assert slugs == ["labor-cost-2026-11-08-o05", "labor-cost-2026-11-08-o06"]
+
+
+def test_successor_slug_that_exists_gets_a_numeric_suffix(tmp_path):
+    st, scores, cases, utter = fixture(tmp_path)
+    st.remember("labor-cost-2026-11-08-o03", "既存", "既にある記憶")
+    propose(st, scores, utter, cases, "2026-11-08")
+    p = {r["case_id"]: r for r in rows(st)}["o03"]
+    assert p["proposed"]["new_memory"]["slug"] == "labor-cost-2026-11-08-o03-2"

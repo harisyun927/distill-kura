@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import tempfile
 from datetime import date as _date
 
@@ -108,8 +109,23 @@ def _disagreeing_line(body: str, traps: list[str]) -> str | None:
     return None
 
 
+def _successor_slug(old: str, day: str, case_id, store: Store, taken: set[str]) -> str:
+    """`<old>-<day>-<case id>`, so two cases on one memory on one day never share a
+    successor (applying both would have the second overwrite the first). If that name is
+    already a memory in the store, or was handed out earlier in this run, add -2, -3 …"""
+    cid = re.sub(r"[^a-z0-9]+", "-", str(case_id or "").lower()).strip("-")
+    base = f"{old}-{day}" + (f"-{cid}" if cid else "")
+    existing = store.slug_set()
+    slug, n = base, 1
+    while slug in existing or slug in taken:
+        n += 1
+        slug = f"{base}-{n}"
+    taken.add(slug)
+    return slug
+
+
 def _proposal(day: str, score: dict, slug: str, case: dict, store: Store,
-              utter: list[dict]) -> dict:
+              utter: list[dict], taken: set[str]) -> dict:
     base = {"date": day, "case_id": score.get("id"), "verdict": score["verdict"],
             "slug": slug}
 
@@ -141,7 +157,7 @@ def _proposal(day: str, score: dict, slug: str, case: dict, store: Store,
         kind = "supersede"
         proposed = {
             "new_memory": {
-                "slug": f"{slug}-{day}",
+                "slug": _successor_slug(slug, day, score.get("id"), store, taken),
                 "title": answer,
                 "body": f"正: {answer}。\n原文:\n{quoted}\n出典: kura-audit case "
                         f"{score.get('id')}",
@@ -171,6 +187,7 @@ def propose(store: Store, scores_path: str, utter_path: str,
     cases = {c.get("id"): c for c in _read_jsonl(cases_path)} if cases_path else {}
     utter = _read_jsonl(utter_path)
     new = []
+    taken: set[str] = set()
     for s in scores:
         slugs = _as_list(s.get("slugs"))
         if not slugs:
@@ -178,7 +195,8 @@ def propose(store: Store, scores_path: str, utter_path: str,
                         "slug": None, "kind": "needs-human",
                         "reason": "score names no slug", "status": "pending"})
         for slug in slugs:
-            new.append(_proposal(day, s, slug, cases.get(s.get("id"), {}), store, utter))
+            new.append(_proposal(day, s, slug, cases.get(s.get("id"), {}), store, utter,
+                                  taken))
 
     path = os.path.join(store.still, FILE)
     keys = {(p["case_id"], p["slug"]) for p in new}
