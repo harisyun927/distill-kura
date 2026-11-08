@@ -145,3 +145,28 @@ model = "none"
     assert main(base + ["--scores", scores, "--date", "2026-11-08"]) == 0
     empty = jl(tmp_path / "none.jsonl", [{"id": "c", "verdict": "correct", "slugs": []}])
     assert main(base + ["--scores", empty]) == 2
+
+
+def test_frozen_store_gets_no_proposals_file(tmp_path):
+    st, scores, cases, utter = fixture(tmp_path)
+    st.write_policy = "frozen"
+    still = os.path.join(st.path, "_still")
+    had = os.path.exists(still)
+    import pytest
+    with pytest.raises(ValueError, match="frozen"):
+        propose(st, scores, utter, cases, "2026-11-08")
+    assert os.path.exists(still) == had
+    assert not os.path.exists(os.path.join(st.still, "dream-proposals.jsonl"))
+    assert not os.path.exists(os.path.join(st.still, "dream-proposals.jsonl.tmp"))
+
+
+def test_long_quote_is_kept_whole(tmp_path):
+    st, scores, cases, utter = fixture(tmp_path)
+    long_q = "一行目の言葉です\n二行目の言葉です\n三行目の言葉です\n四行目の言葉です"
+    cases = jl(tmp_path / "cases2.jsonl", [
+        {"id": "d12", "traps": ["営業カレンダー"], "answer": "別", "quote": [long_q]}])
+    utter = jl(tmp_path / "utter2.jsonl", [
+        {"ts": "2026-10-08T09:00:00Z", "file": "c.jsonl", "line": 1, "text": "前\n" + long_q + "\n後"}])
+    propose(st, scores, utter, cases, "2026-11-08")
+    ev = [r for r in rows(st) if r["case_id"] == "d12"][0]["evidence"][0]["quote"]
+    assert ev == long_q

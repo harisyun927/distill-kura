@@ -21,12 +21,11 @@ import json
 import os
 from datetime import date as _date
 
-from .store import Store
+from .store import FROZEN, Store
 
 FILE = "dream-proposals.jsonl"
 VERDICTS = ("wrong", "stale")
 MIN_QUOTE = 6          # kura-audit's `short` rule: 「はい」 is not evidence of content
-MAX_LINES = 3
 
 
 def _read_jsonl(path: str) -> list[dict]:
@@ -48,13 +47,14 @@ def _as_list(v) -> list[str]:
 
 
 def _quote_lines(text: str, needle: str) -> str:
-    """The lines of `text` the needle sits on, verbatim, at most three."""
+    """The lines of `text` the needle sits on, verbatim, all of them: what matched is
+    what is kept, so a quote longer than three lines is never cut short."""
     start = text.find(needle)
     end = start + len(needle)
     first = text.rfind("\n", 0, start) + 1
     last = text.find("\n", end)
     lines = text[first:last if last != -1 else len(text)].split("\n")
-    return "\n".join(lines[:MAX_LINES])
+    return "\n".join(lines)
 
 
 def find_evidence(quotes: list[str], utter: list[dict]) -> list[dict]:
@@ -122,6 +122,10 @@ def _proposal(day: str, score: dict, slug: str, case: dict, store: Store,
 def propose(store: Store, scores_path: str, utter_path: str,
             cases_path: str | None = None, day: str | None = None) -> dict:
     """Write proposals for every wrong/stale score; return what happened."""
+    # Every write to a store goes through its policy first, the _still workshop file
+    # included (AGENTS.md): checked before any directory or temp file is made.
+    if getattr(store, "write_policy", None) == FROZEN:
+        raise ValueError(f"store '{store.name}' is frozen: nothing may write")
     day = day or _date.today().isoformat()
     scores = [s for s in _read_jsonl(scores_path) if s.get("verdict") in VERDICTS]
     cases = {c.get("id"): c for c in _read_jsonl(cases_path)} if cases_path else {}

@@ -714,4 +714,7 @@ A score whose quote is not found verbatim becomes `kind: needs-human` with a `re
 and no proposal. Re-running replaces that case's `pending` line; lines moved off
 `pending` by a person are kept. No model is called, and nothing else in the store is
 written — applying a proposal is a person's act (back the store up first). Exit 2
-means there was no wrong/stale score to propose for.
+means there was no wrong/stale score to propose for. A `frozen` store is refused before
+anything is created (the `_still` workshop file is a store write too; exit 1). A quote
+longer than three lines is kept whole in `evidence`, never cut: what matched is what is
+shown.
