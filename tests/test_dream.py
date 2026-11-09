@@ -304,6 +304,47 @@ def test_successor_slug_that_exists_gets_a_numeric_suffix(tmp_path):
     assert p["proposed"]["new_memory"]["slug"] == "labor-cost-2026-11-08-o03-2"
 
 
+def _one_case(tmp_path, cid, tag):
+    scores = jl(tmp_path / f"s-{tag}.jsonl", [
+        {"id": cid, "type": "overturn", "verdict": "wrong", "slugs": ["labor-cost"]}])
+    cases = jl(tmp_path / f"c-{tag}.jsonl", [
+        {"id": cid, "traps": ["賀陽住研"], "answer": f"カタクル（{cid}）",
+         "quote": ["あれ何回も言ってますけど、カタクルで"]}])
+    return scores, cases
+
+
+def test_successor_left_by_an_earlier_run_is_reserved(tmp_path):
+    """Codex P2 on distill-kura#8: `case_1` and `Case-1` are one name after
+    `write_slug`. Run in two separate runs, the second used to start from an empty
+    `taken` and propose the same successor again — two pending lines, applying both
+    overwrites the first. The name on file is reserved now, so the second gets -2."""
+    st, _, _, utter = fixture(tmp_path)
+    s1, c1 = _one_case(tmp_path, "case_1", "a")
+    s2, c2 = _one_case(tmp_path, "Case-1", "b")
+    propose(st, s1, utter, c1, "2026-11-08")
+    propose(st, s2, utter, c2, "2026-11-08")
+    got = {r["case_id"]: r["proposed"]["new_memory"]["slug"] for r in rows(st)}
+    assert got == {"case_1": "labor-cost-2026-11-08-case-1",
+                   "Case-1": "labor-cost-2026-11-08-case-1-2"}
+    assert len(rows(st)) == 2
+
+
+def test_rerunning_one_case_keeps_its_successor_name(tmp_path):
+    """The pending line a run replaces is the same proposal, updated: its successor name
+    is not reserved against itself, so a rerun neither grows the file nor renames it."""
+    st, scores, cases, utter = fixture(tmp_path)
+    propose(st, scores, utter, cases, "2026-11-08")
+    first = {r["case_id"]: r["proposed"]["new_memory"]["slug"]
+             for r in rows(st) if r["kind"] == "supersede"}
+    n = len(rows(st))
+    propose(st, scores, utter, cases, "2026-11-08")
+    again = {r["case_id"]: r["proposed"]["new_memory"]["slug"]
+             for r in rows(st) if r["kind"] == "supersede"}
+    assert again == first == {"d12": "market-calendar-2026-11-08-d12",
+                              "o03": "labor-cost-2026-11-08-o03"}
+    assert len(rows(st)) == n
+
+
 def _study_case(tmp_path, old_name):
     """A long-form `_study/<old_name>` memory and one wrong case on it."""
     st, _, _, utter = fixture(tmp_path)

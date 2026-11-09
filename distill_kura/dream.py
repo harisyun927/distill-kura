@@ -108,29 +108,68 @@ def _disagreeing_line(body: str, traps: list[str]) -> str | None:
     return None
 
 
-def _successor_slug(old: str, day: str, case_id, store: Store, taken: set[str]) -> str:
-    """`<old>-<day>-<case id>`, so two cases on one memory on one day never share a
-    successor (applying both would have the second overwrite the first). If that name is
-    already a memory in the store, or was handed out earlier in this run, add -2, -3 …
-
-    The whole name goes through `write_slug` — the rule `kura remember` stores by —
-    BEFORE the collision check and before it is written out: `_study/old` would
-    otherwise be proposed as `_study/old-…` but stored as `study-old-…`, and the
-    `kura retire` that follows would find no memory of the proposed name. Collisions
-    are judged case-insensitively, since a file system may be."""
+def _successor_base(old: str, day: str, case_id) -> str:
+    """`<old>-<day>-<case id>`, so two cases on one memory on one day start from
+    different names. The whole name goes through `write_slug` — the rule `kura remember`
+    stores by — so `_study/old` is proposed as the `study-old-…` it will be stored as and
+    the `kura retire` that follows finds it. Only the BASE: the name actually handed out
+    is chosen by `_assign_successors`, inside the lock."""
     cid = write_slug(str(case_id or ""))
-    base = write_slug(f"{old}-{day}" + (f"-{cid}" if cid else ""))
-    existing = {s.lower() for s in store.slug_set()}
-    slug, n = base, 1
-    while slug in existing or slug in taken:
-        n += 1
-        slug = f"{base}-{n}"
-    taken.add(slug)
-    return slug
+    return write_slug(f"{old}-{day}" + (f"-{cid}" if cid else ""))
+
+
+def _name_key(name) -> str:
+    """The one key every collision is judged on: case-insensitive AND normalised, since a
+    file system may fold case and `kura remember` stores by `write_slug`."""
+    return write_slug(str(name or ""))
+
+
+def _assign_successors(new: list[dict], on_file: list[dict], store: Store) -> None:
+    """Hand out every successor slug of this run, in ONE place, against everything that
+    could already hold the name (the ONLY function that picks one; called inside the
+    lock, after the proposals file is read and before it is written):
+
+    - every memory in the store (`slug_set`, judged on `_name_key`);
+    - every line left in the proposals file that this run does not replace — pending
+      or not, since a line a person moved on may already have been applied;
+    - every name handed out earlier in this run.
+
+    A pending line this run REPLACES (same (case_id, slug)) gives its successor name to
+    its replacement when that name is still free: the same proposal, updated, keeps the
+    name a person may already have noted. Otherwise `<base>`, then -2, -3 … until free.
+    So `case_1` and `case-1` — one name after `write_slug` — get two names whether they
+    arrive in one run or in two."""
+    keys = {(p["case_id"], p["slug"]) for p in new}
+    reserved = {_name_key(s) for s in store.slug_set()}
+    previous: dict[tuple, list[str]] = {}
+    for p in on_file:
+        succ = ((p.get("proposed") or {}).get("new_memory") or {}).get("slug")
+        if not isinstance(succ, str) or not succ:
+            continue
+        if p.get("status") == "pending" and (p.get("case_id"), p.get("slug")) in keys:
+            previous.setdefault((p.get("case_id"), p.get("slug")), []).append(succ)
+        else:
+            reserved.add(_name_key(succ))
+    for p in new:
+        if p.get("kind") != "supersede":
+            continue
+        nm = p["proposed"]["new_memory"]
+        base = nm["slug"]
+        prev = previous.get((p["case_id"], p["slug"])) or []
+        keep = prev.pop(0) if prev else None
+        if keep and write_slug(keep) == keep and _name_key(keep) not in reserved:
+            slug = keep
+        else:
+            slug, n = base, 1
+            while _name_key(slug) in reserved:
+                n += 1
+                slug = f"{base}-{n}"
+        reserved.add(_name_key(slug))
+        nm["slug"] = slug
 
 
 def _proposal(day: str, score: dict, slug: str, case: dict, store: Store,
-              utter: list[dict], taken: set[str]) -> dict:
+              utter: list[dict]) -> dict:
     base = {"date": day, "case_id": score.get("id"), "verdict": score["verdict"],
             "slug": slug}
 
@@ -162,7 +201,8 @@ def _proposal(day: str, score: dict, slug: str, case: dict, store: Store,
         kind = "supersede"
         proposed = {
             "new_memory": {
-                "slug": _successor_slug(slug, day, score.get("id"), store, taken),
+                # the base only; the name is handed out inside the lock
+                "slug": _successor_base(slug, day, score.get("id")),
                 "title": answer,
                 "body": f"正: {answer}。\n原文:\n{quoted}\n出典: kura-audit case "
                         f"{score.get('id')}",
@@ -201,7 +241,6 @@ def propose(store: Store, scores_path: str, utter_path: str,
     cases = {c.get("id"): c for c in _read_jsonl(cases_path)} if cases_path else {}
     utter = _read_jsonl(utter_path)
     new = []
-    taken: set[str] = set()
     for s in scores:
         slugs = _as_list(s.get("slugs"))
         if not slugs:
@@ -209,8 +248,7 @@ def propose(store: Store, scores_path: str, utter_path: str,
                         "slug": None, "kind": "needs-human",
                         "reason": "score names no slug", "status": "pending"})
         for slug in slugs:
-            new.append(_proposal(day, s, slug, cases.get(s.get("id"), {}), store, utter,
-                                  taken))
+            new.append(_proposal(day, s, slug, cases.get(s.get("id"), {}), store, utter))
 
     path = os.path.join(store.still, FILE)
     keys = {(p["case_id"], p["slug"]) for p in new}
@@ -218,10 +256,13 @@ def propose(store: Store, scores_path: str, utter_path: str,
     if new:
         _refuse_write(store)       # again at the door: the swap can land mid-run
         with _locked(store.still):
-            if os.path.exists(path):
-                kept = [p for p in _read_jsonl(path)
-                        if not (p.get("status") == "pending"
-                                and (p.get("case_id"), p.get("slug")) in keys)]
+            on_file = _read_jsonl(path) if os.path.exists(path) else []
+            # names are handed out here, against what is on file NOW: two runs, or a
+            # run after one, cannot both propose the same successor
+            _assign_successors(new, on_file, store)
+            kept = [p for p in on_file
+                    if not (p.get("status") == "pending"
+                            and (p.get("case_id"), p.get("slug")) in keys)]
             fd, tmp = tempfile.mkstemp(dir=store.still, prefix=FILE + ".", suffix=".tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
