@@ -160,6 +160,28 @@ def test_the_window_is_a_known_prefill_key():
     _check_table("prefill", {"recent_read_days": 14}, _PREFILL_TYPES)
 
 
+def test_a_grouped_index_line_keeps_every_memory_in_the_order(tmp_path):
+    """`- a family — [X](x.md)/[Y](y.md)` is a supported index shape (weave passes it
+    through). Its memories used to be missing from `order`, so neither pinning nor a
+    fresh read could bring them forward."""
+    s = make(tmp_path)
+    for n in ("x", "y", "z"):
+        s.remember(n, f"memory {n}", f"body of {n}")
+    idx = s.index_text()
+    idx = "\n".join(l for l in idx.splitlines()
+                    if not any(f"({n}.md)" in l for n in ("x", "y", "z")))
+    idx += ("\n- a family — [X](x.md) — one/[Y](y.md) — two\n"
+            "- [Z](z.md) — three/[A2](a.md) — a again\n")
+    with open(s.index_path, "w", encoding="utf-8") as f:
+        f.write(idx)
+    assert map_budget.index_slugs(s) == ["a", "b", "c", "d", "e", "x", "y", "z"]
+    reads(s, [(NOW - DAY, ["y"])])
+    p = map_budget.plan(s, {}, pinned=["x"], now=NOW)
+    assert p["order"][:2] == ["x", "y"]                   # pinned, then read
+    assert p["recent"] == ["y"]
+    assert sorted(p["order"]) == sorted(["a", "b", "c", "d", "e", "x", "y", "z"])
+
+
 def test_a_bad_window_is_refused_at_load(tmp_path):
     """A negative window used to load fine and fail only when `/map_budget` was asked:
     a server that starts, then answers every budget request with 400."""

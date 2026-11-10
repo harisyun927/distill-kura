@@ -49,15 +49,23 @@ def recent_read_days(cfg: dict | None = None) -> float:
 
 
 def index_slugs(store: Store) -> list[str]:
-    """Slugs in the order the canonical index lists them (oldest first, as appended)."""
+    """Slugs in the order the canonical index lists them (oldest first, as appended).
+
+    Every link on a bullet line counts, in the order it is written. A grouped line —
+    `- a family — [A](a.md)/[B](b.md)`, which `weave.py` passes through untouched —
+    used to be skipped whole (it does not start with `- [`), and a `- [A](a.md)/[B](b.md)`
+    line kept only A (Codex on distill-kura#11): those memories could not come
+    forward even when pinned or just read. Each memory keeps its own place in `order`;
+    a host cutting LINES puts a grouped line where its earliest memory stands, i.e.
+    at the most recent read among the memories it carries."""
     out, seen = [], set()
     for line in store.index_text().splitlines():
-        if not line.startswith("- ["):
+        if not line.lstrip().startswith("-"):
             continue
-        m = _SLUG.search(line)
-        if m and m.group(1) not in seen:
-            seen.add(m.group(1))
-            out.append(m.group(1))
+        for slug in _SLUG.findall(line):
+            if slug not in seen:
+                seen.add(slug)
+                out.append(slug)
     return out
 
 
