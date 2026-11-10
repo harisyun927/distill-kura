@@ -158,3 +158,25 @@ def test_the_window_is_a_known_prefill_key():
     from distill_kura.registry import _PREFILL_TYPES, _check_table
     assert "recent_read_days" in _PREFILL_TYPES
     _check_table("prefill", {"recent_read_days": 14}, _PREFILL_TYPES)
+
+
+def test_a_bad_window_is_refused_at_load(tmp_path):
+    """A negative window used to load fine and fail only when `/map_budget` was asked:
+    a server that starts, then answers every budget request with 400."""
+    from distill_kura.registry import Registry
+    Store(name="s", path=str(tmp_path / "s")).init_files()
+    head = f'[stores.s]\npath = "{(tmp_path / "s").as_posix()}"\n'
+    cfg = tmp_path / "kura.toml"
+    cases = [("[prefill]\nrecent_read_days = -1\n", "[prefill]"),
+             ("[stores.s.prefill]\nrecent_read_days = -1\n", "[stores.s.prefill]"),
+             ("[prefill]\nrecent_read_days = nan\n", "[prefill]"),
+             ("[stores.s.prefill]\nrecent_read_days = 7.5\n", "[stores.s.prefill]")]
+    for body, section in cases:
+        cfg.write_text(head + body, encoding="utf-8")
+        with pytest.raises(ValueError) as e:
+            Registry.load(str(cfg))
+        assert section in str(e.value) and "recent_read_days" in str(e.value)
+    cfg.write_text(head + "[prefill]\nrecent_read_days = 0\n"
+                   "[stores.s.prefill]\nrecent_read_days = 14\n", encoding="utf-8")
+    reg = Registry.load(str(cfg))
+    assert reg.prefill_cfg_for(reg.stores["s"])["recent_read_days"] == 14
