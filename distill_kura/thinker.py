@@ -49,6 +49,12 @@ def bearer_headers(api_key_env: str | None) -> dict:
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
+# The one list of values Endpoint.structured may take; the registry checks against it.
+STRUCTURED_SCHEMA = "json_schema"
+STRUCTURED_OBJECT = "json_object"
+STRUCTURED_MODES = ("", STRUCTURED_SCHEMA, STRUCTURED_OBJECT)
+
+
 @dataclass
 class Endpoint:
     # No built-in default: an unset url used to silently become 127.0.0.1:8000, so a
@@ -62,6 +68,11 @@ class Endpoint:
     thinking: bool = False           # for templates that only know enable_thinking
     dialect: str = "vllm"            # vllm | openai | generic — see the module docstring
     extra: dict = field(default_factory=dict)   # merged into the request body verbatim
+    # Structured output for the calls that ask for JSON: "" (off, the default),
+    # "json_schema" (the caller's schema is enforced) or "json_object". Sent only with
+    # a schema-carrying call, never on the plain-text ones, and dropped by the
+    # `generic` retry so a server that does not know the field still answers.
+    structured: str = ""
     name: str = "thinker"
     last_error: str = ""             # why the last call failed, for health and logs
     last_usage: dict | None = None   # usage from the last answered call, when reported
@@ -78,8 +89,20 @@ class Endpoint:
                 "reasoning_effort": self.effort,
                 "thinking_effort": self.effort}
 
+    def response_format(self, schema: dict | None) -> dict | None:
+        """The `response_format` for a call that expects `schema`, or None when this
+        endpoint does not enforce structure (or the call is plain text)."""
+        if not schema or not self.structured:
+            return None
+        if self.structured == STRUCTURED_OBJECT:
+            return {"type": "json_object"}
+        if self.structured == STRUCTURED_SCHEMA:
+            return {"type": "json_schema",
+                    "json_schema": {"name": "reply", "schema": schema}}
+        return None
+
     def _body(self, system: str, user: str, max_tokens: int, temperature: float | None,
-              dialect: str) -> dict:
+              dialect: str, schema: dict | None = None) -> dict:
         body = {
             "model": self.model,
             "messages": [{"role": "system", "content": system},
@@ -92,10 +115,15 @@ class Endpoint:
             body.update(self.extra)
         elif dialect == "openai":
             body.update(self.extra)
+        if dialect in ("vllm", "openai"):
+            fmt = self.response_format(schema)
+            if fmt:
+                body["response_format"] = fmt
         return body                     # generic: the minimum, extras included nowhere
 
     def _choice(self, system: str, user: str, max_tokens: int,
-                timeout: float | None, temperature: float | None) -> dict | None:
+                timeout: float | None, temperature: float | None,
+                schema: dict | None = None) -> dict | None:
         """The raw `choices[0]` of one request, or None when the call did not produce
         one. Every caller of this endpoint goes through here, so the retry ladder, the
         `last_error` wording and the "unconfigured is unreachable" rule exist once —
@@ -117,7 +145,7 @@ class Endpoint:
                 req = urllib.request.Request(
                     self.url.rstrip("/") + "/chat/completions",
                     data=json.dumps(self._body(system, user, max_tokens, temperature,
-                                               dialect)).encode(),
+                                               dialect, schema)).encode(),
                     headers=headers)
                 with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                     d = json.load(r)
@@ -146,13 +174,15 @@ class Endpoint:
         return None
 
     def ask(self, system: str, user: str, max_tokens: int = 400,
-            timeout: float | None = None, temperature: float | None = None) -> str | None:
+            timeout: float | None = None, temperature: float | None = None,
+            schema: dict | None = None) -> str | None:
         """The answer text, or None when the call did not produce one.
 
         None means "degrade gracefully", never "the model said nothing" — the reason is
         left in `last_error` so an operator can tell a wrong key from a wrong URL from a
-        rejected field."""
-        choice = self._choice(system, user, max_tokens, timeout, temperature)
+        rejected field. `schema` is the JSON shape the caller expects; it is enforced
+        only when the endpoint is configured with `structured`."""
+        choice = self._choice(system, user, max_tokens, timeout, temperature, schema)
         if choice is None:
             return None
         m = choice["message"]

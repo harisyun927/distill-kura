@@ -110,6 +110,32 @@ _HEAD_KEYS = ("EXTENDS", "TITLE", "DESC", "TAGS", "BELONGS_BECAUSE", "KEEP", "MA
 _HEAD_LINE = re.compile(r"^(" + "|".join(_HEAD_KEYS) + r"):[ \t]*(.*)$")
 
 
+# The shape SPOT_SYS / COVERAGE_SYS ask for: a bare JSON array of candidate objects.
+# Top level is an array on purpose — `salvage` takes every closed top-level `{...}`, so
+# an object wrapper ({"candidates": [...]}) would come back as one bogus candidate.
+# topic, kind, why and quotes are required (salvage keeps only objects with quotes or
+# kind "idea"; an idea may send []); the gate judges the rest as before.
+SPOT_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "topic": {"type": "string"},
+            "kind": {"type": "string",
+                     "enum": ["user", "feedback", "project", "reference", "idea"]},
+            "why": {"type": "string"},
+            "belongs_because": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "callsigns": {"type": "array", "items": {"type": "string"}},
+            "keep": {"type": "string"},
+            "may_fade": {"type": "string"},
+            "quotes": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["topic", "kind", "why", "quotes"],
+    },
+}
+
+
 def _is_empty_list(raw: str) -> str | bool:
     """Is this reply an explicit, parseable empty list? Nothing else counts as the
     brain saying "there is nothing here" — silence, prose and half a JSON array are
@@ -278,9 +304,19 @@ class Distiller:
     def _sys(self, task: str) -> str:
         return self.charter + "\n──────────\n" + task
 
-    def brain(self, task: str, user: str, max_tokens: int = 2000) -> str:
+    def brain(self, task: str, user: str, max_tokens: int = 2000,
+              schema: dict | None = None) -> str:
+        kw = {"schema": schema} if schema else {}
         return self.models.brain.ask(self._sys(task), user, max_tokens=max_tokens,
-                                     timeout=3600) or ""
+                                     timeout=3600, **kw) or ""
+
+    def _brain_json(self, task: str, user: str, max_tokens: int) -> str:
+        """A brain call whose answer must be the SPOT candidate array. The schema rides
+        only when the brain endpoint enforces structure (`structured`), so a brain
+        without it — or anything standing in for `brain` — is called exactly as before."""
+        if getattr(self.models.brain, "structured", ""):
+            return self.brain(task, user, max_tokens, schema=SPOT_SCHEMA)
+        return self.brain(task, user, max_tokens)
 
     def scribe(self, task: str, user: str, max_tokens: int = 1400) -> str | None:
         # None survives on purpose: "the scribe was unreachable" and "the scribe
@@ -336,8 +372,9 @@ class Distiller:
         a failure instead; here we only tell the two apart."""
         limit = max_items or self.max_items
         try:
-            raw = self.brain(prompts.SPOT_SYS.format(max_items=limit, language=self.language),
-                             as_evidence(segs), 5000)
+            raw = self._brain_json(
+                prompts.SPOT_SYS.format(max_items=limit, language=self.language),
+                as_evidence(segs), 5000)
         except Exception as e:                  # a socket that died mid-read, say
             return [], {"reason": "transient", "detail": f"{type(e).__name__}: {e}"}
         err = self.models.brain.last_error      # cleared on every answered call
@@ -360,7 +397,7 @@ class Distiller:
             if len(found) >= limit:
                 break
             already = "\n".join(f"- {c.get('topic')}: {c.get('why')}" for c in found)
-            more = salvage(self.brain(
+            more = salvage(self._brain_json(
                 prompts.COVERAGE_SYS.format(max_items=limit - len(found),
                                             language=self.language),
                 f"=== ALREADY TAKEN ===\n{already or '(nothing yet)'}\n\n"
@@ -1761,6 +1798,14 @@ class Distiller:
             _log(f"⚠⚠ {MAX_ATTEMPTS} attempts and the brain still will not answer — "
                  f"the batch stays on the shelf: {failure['detail'][:120]}")
             return got, [{**base, "retryable": False}]
+        if (failure["reason"] == "bad_reply" and rec.get("reason") == "bad_reply"
+                and failure["detail"][:200] == (rec.get("detail") or "")[:200]):
+            # The server samples from a key derived from the prompt when no seed is
+            # given, so the same batch gets the same wrong answer every time: another
+            # try only burns another few thousand tokens (life-meta#1363).
+            _log(f"⚠⚠ the brain gave the same unreadable reply twice — the batch stays "
+                 f"on the shelf: {failure['detail'][:120]}")
+            return got, [{**base, "retryable": False, "reason": "same bad reply"}]
         return got, [base]
 
     @staticmethod
