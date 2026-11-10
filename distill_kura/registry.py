@@ -126,7 +126,7 @@ _MOUTH_REQUIRED = ("name", "url", "store")
 _MODEL_ROLES = {"thinker", "brain", "scribe"}
 _MODEL_TYPES = {"url": str, "model": str, "api_key_env": str, "timeout": (int, float),
                 "temperature": (int, float), "effort": str, "thinking": bool,
-                "dialect": str, "extra": dict}
+                "dialect": str, "structured": str, "extra": dict}
 # Writer A/B entries deliberately use the endpoint's explicit fields rather than a
 # second private config vocabulary. `rep` is the one bench convenience: it becomes a
 # request extra so a report can say whether 1.00 or 1.05 was actually tested.

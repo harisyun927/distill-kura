@@ -527,3 +527,18 @@ def test_health_build_id_is_unknown_when_nothing_stamped_it(tmp_path, monkeypatc
         assert fetch()["build_id"] == "unknown"
     finally:
         srv.shutdown()
+
+
+def test_models_brain_structured_loads_through_registry(tmp_path):
+    """`structured` on [models.brain] must pass the toml validation (it was rejected as an
+    unknown key) and land on the Endpoint; Endpoint.from_dict alone never hits that check."""
+    cfg = write_config(tmp_path, f"""
+[stores.main]
+path = "{tmp_path / 'main'}"
+[models.brain]
+url = "http://localhost:1/v1"
+model = "m"
+structured = "json_schema"
+""")
+    reg = Registry.load(cfg)
+    assert reg.models.brain.structured == "json_schema"
