@@ -57,9 +57,13 @@ def index_slugs(store: Store) -> list[str]:
     line kept only A (Codex on distill-kura#11): those memories could not come
     forward even when pinned or just read. Each memory keeps its own place in `order`;
     a host cutting LINES puts a grouped line where its earliest memory stands, i.e.
-    at the most recent read among the memories it carries."""
+    at the most recent read among the memories it carries.
+
+    Read through `Store._uncommented`, as `known_slugs()` does: a bullet-shaped example
+    inside an HTML comment (the format hint, notes-to-self) is not a memory, and must
+    neither join `order` nor take a real memory's place in it (Codex on distill-kura#11)."""
     out, seen = [], set()
-    for line in store.index_text().splitlines():
+    for line in store._uncommented(store.index_text()).splitlines():
         if not line.lstrip().startswith("-"):
             continue
         for slug in _SLUG.findall(line):

@@ -182,6 +182,22 @@ def test_a_grouped_index_line_keeps_every_memory_in_the_order(tmp_path):
     assert sorted(p["order"]) == sorted(["a", "b", "c", "d", "e", "x", "y", "z"])
 
 
+def test_links_inside_an_html_comment_are_not_memories(tmp_path):
+    """A multiline comment holding bullet-shaped examples used to put a nonexistent
+    memory into `order` and let a commented link to a real memory steal its place."""
+    s = make(tmp_path, names=("a", "b", "c"))
+    lines = s.index_text().splitlines()
+    first = next(i for i, l in enumerate(lines) if l.startswith("- ["))
+    lines[first:first] = ["<!-- examples:", "- [C](c.md) — an example",
+                          "- [Example](example.md) — not a memory", "-->"]
+    idx = "\n".join(lines) + "\n"
+    with open(s.index_path, "w", encoding="utf-8") as f:
+        f.write(idx)
+    assert map_budget.index_slugs(s) == ["a", "b", "c"]
+    p = map_budget.plan(s, {}, now=NOW)
+    assert p["order"] == ["c", "b", "a"]
+
+
 def test_a_bad_window_is_refused_at_load(tmp_path):
     """A negative window used to load fine and fail only when `/map_budget` was asked:
     a server that starts, then answers every budget request with 400."""
