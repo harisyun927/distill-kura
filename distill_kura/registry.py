@@ -62,7 +62,7 @@ import tomllib
 from dataclasses import dataclass, field
 
 from .store import Store, contained
-from .thinker import Models
+from .thinker import Models, STRUCTURED_MODES
 from .prefill import RESIDENT_MODES
 
 CONFIG_CANDIDATES = ("kura.toml", os.path.expanduser("~/.config/distill-kura/kura.toml"))
@@ -151,6 +151,10 @@ def _check_models(where: str, cfg) -> None:
             raise ValueError(f"[{where}.{role}] has unknown key(s) {sorted(unknown)}. "
                              f"Known: {sorted(_MODEL_TYPES)}.")
         _check_table(f"{where}.{role}", rc, _MODEL_TYPES)
+        st = rc.get("structured")
+        if st is not None and st not in STRUCTURED_MODES:
+            raise ValueError(f"[{where}.{role}] structured must be one of "
+                             f"{list(STRUCTURED_MODES)}, got {st!r}")
         d = rc.get("dialect")
         if d is not None and d not in ("vllm", "openai", "generic"):
             raise ValueError(f"[{where}.{role}] dialect must be vllm, openai or generic, "

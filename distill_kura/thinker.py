@@ -49,6 +49,12 @@ def bearer_headers(api_key_env: str | None) -> dict:
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
+# The one list of values Endpoint.structured may take; the registry checks against it.
+STRUCTURED_SCHEMA = "json_schema"
+STRUCTURED_OBJECT = "json_object"
+STRUCTURED_MODES = ("", STRUCTURED_SCHEMA, STRUCTURED_OBJECT)
+
+
 @dataclass
 class Endpoint:
     # No built-in default: an unset url used to silently become 127.0.0.1:8000, so a
@@ -88,9 +94,9 @@ class Endpoint:
         endpoint does not enforce structure (or the call is plain text)."""
         if not schema or not self.structured:
             return None
-        if self.structured == "json_object":
+        if self.structured == STRUCTURED_OBJECT:
             return {"type": "json_object"}
-        if self.structured == "json_schema":
+        if self.structured == STRUCTURED_SCHEMA:
             return {"type": "json_schema",
                     "json_schema": {"name": "reply", "schema": schema}}
         return None

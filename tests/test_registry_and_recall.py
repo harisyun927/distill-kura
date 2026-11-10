@@ -542,3 +542,15 @@ structured = "json_schema"
 """)
     reg = Registry.load(cfg)
     assert reg.models.brain.structured == "json_schema"
+
+
+def test_misspelled_structured_is_refused_in_models_and_profiles(tmp_path):
+    """A typo like "json_schmea" must not load and silently mean "no structure"."""
+    import pytest
+    for table in ("models.brain", "model_profiles.p.thinker"):
+        body = (f"[stores.main]\npath = \"{tmp_path / 'main'}\"\n"
+                f"[{table}]\nurl = \"http://localhost:1/v1\"\nmodel = \"m\"\n"
+                "structured = \"json_schmea\"\n")
+        cfg = write_config(tmp_path, body)
+        with pytest.raises(ValueError, match="json_schmea"):
+            Registry.load(cfg)
