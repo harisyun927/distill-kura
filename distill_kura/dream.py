@@ -1,0 +1,282 @@
+"""`kura dream-propose` — the night's repair proposals, never the repair itself.
+
+A person scored some memories `wrong` (written down wrongly) or `stale` (still the
+ruling that was later overturned) with life-meta's kura-audit. This turns each such
+(case, slug) into ONE proposal line in `<store>/_still/dream-proposals.jsonl`, with the
+person's own words quoted verbatim from the conversation index (kura-audit `index` →
+utter.jsonl) as the evidence. Applying a proposal is a person's act in the morning;
+nothing here touches a memory, the index or anything outside that one file.
+
+No model call (v0): the proposal is the scored answer, the verbatim quote that backs it,
+and the line of the memory that disagrees — enough to decide by. A memory is never
+proposed to be rewritten in place: with a scored answer the proposal is `supersede` (a
+new memory's draft plus "retire the old one as superseded by it"), and with only the
+person's words and no answer it is `annotate` (a note plus the quote). A proposal whose quote
+cannot be found is not written as a proposal at all; it becomes `needs-human` with the
+reason, because a repair without the person's words behind it is a guess.
+
+Re-running is idempotent: a pending line for the same (case_id, slug) is replaced, and
+lines a person already moved off `pending` are kept as they are.
+"""
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import tempfile
+from datetime import date as _date
+
+from .store import Store, write_slug
+
+FILE = "dream-proposals.jsonl"
+LOCK = "dream-proposals.lock"
+
+
+@contextlib.contextmanager
+def _locked(still: str):
+    """Hold an exclusive per-store lock for the whole read -> filter -> write ->
+    replace of the proposals file, so two dream-propose runs cannot lose a batch."""
+    os.makedirs(still, exist_ok=True)
+    with open(os.path.join(still, LOCK), "a") as fh:
+        try:
+            import fcntl
+        except ImportError:          # no flock on this platform
+            fcntl = None
+        if fcntl:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+VERDICTS = ("wrong", "stale")
+MIN_QUOTE = 6          # kura-audit's `short` rule: 「はい」 is not evidence of content
+
+
+def _read_jsonl(path: str) -> list[dict]:
+    rows = []
+    with open(path, encoding="utf-8") as fh:
+        for n, line in enumerate(fh, 1):
+            if line.strip():
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"{path}:{n}: not JSON ({e.msg})") from None
+    return rows
+
+
+def _as_list(v) -> list[str]:
+    if not v:
+        return []
+    return [str(x) for x in (v if isinstance(v, list) else [v]) if str(x).strip()]
+
+
+def _quote_lines(text: str, needle: str) -> str:
+    """The lines of `text` the needle sits on, verbatim, all of them: what matched is
+    what is kept, so a quote longer than three lines is never cut short."""
+    start = text.find(needle)
+    end = start + len(needle)
+    first = text.rfind("\n", 0, start) + 1
+    last = text.find("\n", end)
+    lines = text[first:last if last != -1 else len(text)].split("\n")
+    return "\n".join(lines)
+
+
+def find_evidence(quotes: list[str], utter: list[dict]) -> list[dict]:
+    """Each quote found character-for-character in a human utterance. Earliest wins."""
+    rows = sorted(utter, key=lambda r: (not r.get("ts"), r.get("ts") or ""))
+    out = []
+    for q in quotes:
+        if len(q) < MIN_QUOTE:
+            continue
+        for r in rows:
+            text = r.get("text") or ""
+            if q in text:
+                src = f"{r.get('file', '?')}:{r.get('line', '?')}"
+                out.append({"source": src, "quote": _quote_lines(text, q)})
+                break
+    return out
+
+
+def _disagreeing_line(body: str, traps: list[str]) -> str | None:
+    """The first line of the memory that carries one of the case's traps (the old or
+    wrong answer), so the morning reader sees WHERE the memory differs."""
+    for t in traps:
+        for line in body.splitlines():
+            if t and t in line:
+                return line.strip()
+    return None
+
+
+def _successor_base(old: str, day: str, case_id) -> str:
+    """`<old>-<day>-<case id>`, so two cases on one memory on one day start from
+    different names. The whole name goes through `write_slug` — the rule `kura remember`
+    stores by — so `_study/old` is proposed as the `study-old-…` it will be stored as and
+    the `kura retire` that follows finds it. Only the BASE: the name actually handed out
+    is chosen by `_assign_successors`, inside the lock."""
+    cid = write_slug(str(case_id or ""))
+    return write_slug(f"{old}-{day}" + (f"-{cid}" if cid else ""))
+
+
+def _name_key(name) -> str:
+    """The one key every collision is judged on: case-insensitive AND normalised, since a
+    file system may fold case and `kura remember` stores by `write_slug`."""
+    return write_slug(str(name or ""))
+
+
+def _assign_successors(new: list[dict], on_file: list[dict], store: Store) -> None:
+    """Hand out every successor slug of this run, in ONE place, against everything that
+    could already hold the name (the ONLY function that picks one; called inside the
+    lock, after the proposals file is read and before it is written):
+
+    - every memory in the store (`slug_set`, judged on `_name_key`);
+    - every line left in the proposals file that this run does not replace — pending
+      or not, since a line a person moved on may already have been applied;
+    - every name handed out earlier in this run.
+
+    A pending line this run REPLACES (same (case_id, slug)) gives its successor name to
+    its replacement when that name is still free: the same proposal, updated, keeps the
+    name a person may already have noted. Otherwise `<base>`, then -2, -3 … until free.
+    So `case_1` and `case-1` — one name after `write_slug` — get two names whether they
+    arrive in one run or in two."""
+    keys = {(p["case_id"], p["slug"]) for p in new}
+    reserved = {_name_key(s) for s in store.slug_set()}
+    previous: dict[tuple, list[str]] = {}
+    for p in on_file:
+        succ = ((p.get("proposed") or {}).get("new_memory") or {}).get("slug")
+        if not isinstance(succ, str) or not succ:
+            continue
+        if p.get("status") == "pending" and (p.get("case_id"), p.get("slug")) in keys:
+            previous.setdefault((p.get("case_id"), p.get("slug")), []).append(succ)
+        else:
+            reserved.add(_name_key(succ))
+    for p in new:
+        if p.get("kind") != "supersede":
+            continue
+        nm = p["proposed"]["new_memory"]
+        base = nm["slug"]
+        prev = previous.get((p["case_id"], p["slug"])) or []
+        keep = prev.pop(0) if prev else None
+        if keep and write_slug(keep) == keep and _name_key(keep) not in reserved:
+            slug = keep
+        else:
+            slug, n = base, 1
+            while _name_key(slug) in reserved:
+                n += 1
+                slug = f"{base}-{n}"
+        reserved.add(_name_key(slug))
+        nm["slug"] = slug
+
+
+def _proposal(day: str, score: dict, slug: str, case: dict, store: Store,
+              utter: list[dict]) -> dict:
+    base = {"date": day, "case_id": score.get("id"), "verdict": score["verdict"],
+            "slug": slug}
+
+    def human(reason: str) -> dict:
+        return {**base, "kind": "needs-human", "reason": reason, "status": "pending"}
+
+    text = store.read_exact(slug)
+    if not text:
+        return human(f"memory {slug!r} is not in store {store.name!r}")
+    if not case:
+        return human("case not found in --cases (no quote to look for)")
+    quotes = _as_list(case.get("quote"))
+    if not quotes:
+        return human("case has no quote of the person's words")
+    evidence = find_evidence(quotes, utter)
+    if not evidence:
+        return human("none of the case's quotes was found verbatim in the utterance index")
+    answer = " ".join(str(case.get("answer") or "").split())
+    _, body = Store._split(text)
+    where = _disagreeing_line(body, _as_list(case.get("traps")))
+    differs = f"本文の該当行: 「{where}」" if where else "本文の該当行: 特定できず（採点メモを見る）"
+    note = str(score.get("note") or "").strip()
+    why = differs + (f"（採点メモ: {note}）" if note else "")
+    quoted = "\n".join(f"「{e['quote']}」（{e['source']}）" for e in evidence)
+    if answer:
+        # stale and wrong alike: the old memory is never rewritten in place. A new
+        # memory carries the right answer and the old one is marked superseded by it,
+        # so the history stays (`kura remember` then `kura retire`, by a person).
+        kind = "supersede"
+        proposed = {
+            "new_memory": {
+                # the base only; the name is handed out inside the lock
+                "slug": _successor_base(slug, day, score.get("id")),
+                "title": answer,
+                "body": f"正: {answer}。\n原文:\n{quoted}\n出典: kura-audit case "
+                        f"{score.get('id')}",
+            },
+            "retire_old": slug,
+            "why": why,
+        }
+    else:
+        # no right answer written in the case, only the person's words: a note on the
+        # old memory with the quote, never a guessed replacement.
+        kind = "annotate"
+        proposed = {"note": f"この記憶は人の言葉と食い違う（{score['verdict']}）。{why}",
+                    "quote": quoted}
+    return {**base, "kind": kind, "proposed": proposed, "evidence": evidence,
+            "status": "pending"}
+
+
+def _refuse_write(store: Store) -> None:
+    """Raise with the store's own refusal: `_frozen_refused` then
+    `_substitution_refusal`, the helpers every other write door asks."""
+    for check in (store._frozen_refused, store._substitution_refusal):
+        if (r := check()) is not None:
+            raise ValueError(r["error"])
+
+
+def propose(store: Store, scores_path: str, utter_path: str,
+            cases_path: str | None = None, day: str | None = None) -> dict:
+    """Write proposals for every wrong/stale score; return what happened."""
+    # Every write to a store goes through its policy first, the _still workshop file
+    # included (AGENTS.md): the same checks, in the same order, as the store's own
+    # write doors (`retire`, `_write`) — frozen, then the directory still being the one
+    # the Store was opened on — before any directory, lock or temp file is made.
+    _refuse_write(store)
+    day = day or _date.today().isoformat()
+    scores = [s for s in _read_jsonl(scores_path) if s.get("verdict") in VERDICTS]
+    cases = {c.get("id"): c for c in _read_jsonl(cases_path)} if cases_path else {}
+    utter = _read_jsonl(utter_path)
+    new = []
+    for s in scores:
+        slugs = _as_list(s.get("slugs"))
+        if not slugs:
+            new.append({"date": day, "case_id": s.get("id"), "verdict": s["verdict"],
+                        "slug": None, "kind": "needs-human",
+                        "reason": "score names no slug", "status": "pending"})
+        for slug in slugs:
+            new.append(_proposal(day, s, slug, cases.get(s.get("id"), {}), store, utter))
+
+    path = os.path.join(store.still, FILE)
+    keys = {(p["case_id"], p["slug"]) for p in new}
+    kept = []
+    if new:
+        _refuse_write(store)       # again at the door: the swap can land mid-run
+        with _locked(store.still):
+            on_file = _read_jsonl(path) if os.path.exists(path) else []
+            # names are handed out here, against what is on file NOW: two runs, or a
+            # run after one, cannot both propose the same successor
+            _assign_successors(new, on_file, store)
+            kept = [p for p in on_file
+                    if not (p.get("status") == "pending"
+                            and (p.get("case_id"), p.get("slug")) in keys)]
+            fd, tmp = tempfile.mkstemp(dir=store.still, prefix=FILE + ".", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                    for p in kept + new:
+                        fh.write(json.dumps(p, ensure_ascii=False) + "\n")
+                os.replace(tmp, path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
+    elif os.path.exists(path):
+        kept = _read_jsonl(path)
+    kinds: dict[str, int] = {}
+    for p in new:
+        kinds[p["kind"]] = kinds.get(p["kind"], 0) + 1
+    return {"path": path, "scored": len(scores), "written": len(new), "kinds": kinds,
+            "kept": len(kept)}

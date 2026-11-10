@@ -21,6 +21,8 @@
     kura bench writers --packets FILE --out DIR
                                       compare configured or explicitly named writers
     kura metrics richness [-s eq]     did it stop remembering LIES or stop remembering (§15)
+    kura dream-propose --scores F --utter F [--cases F]
+                                      repair proposals for wrong/stale scores → _still only
     kura init <name> --path DIR       create a store and print the TOML to paste
     kura distill catchup [-s eq]      start from today: mark every journal drunk up to now
     kura distill run [-s eq]          one pass: drink → spot → gate → write drafts
@@ -363,6 +365,14 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--window", type=float, default=7.0, metavar="DAYS",
                    help="rolling window size, so a trend is visible (default 7)")
 
+    p = sub.add_parser("dream-propose",
+                       help="turn kura-audit's wrong/stale scores into repair proposals "
+                            "in _still/dream-proposals.jsonl — proposes, never applies")
+    p.add_argument("--scores", required=True, help="kura-audit scores.jsonl")
+    p.add_argument("--utter", required=True, help="kura-audit index output (utter.jsonl)")
+    p.add_argument("--cases", help="kura-audit cases.jsonl (the answer and the quote)")
+    p.add_argument("--date", help="date stamped on the proposals (default: today)")
+
     p = sub.add_parser("init", help="create a new store")
     p.add_argument("name")
     p.add_argument("--path", required=True)
@@ -498,6 +508,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     store = _store(reg, getattr(a, "bench_store", None) or a.store)
+
+    if a.cmd == "dream-propose":
+        from . import dream
+        try:
+            r = dream.propose(store, a.scores, a.utter, a.cases, a.date)
+        except (ValueError, OSError) as e:
+            sys.exit(str(e))
+        print(json.dumps(r, ensure_ascii=False, indent=1))
+        return 0 if r["written"] else 2           # 2: no wrong/stale score to propose for
 
     if a.cmd == "metrics":
         from . import richness

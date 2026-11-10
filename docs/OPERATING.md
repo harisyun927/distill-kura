@@ -695,3 +695,57 @@ rejections up AND `gated_kept` down against the previous window —
 
 It is a gauge, not a gate: exit code stays 0, and a human decides what the
 pattern means.
+
+
+## Night repair proposals (`kura dream-propose`)
+
+When a person has scored memories with kura-audit (`scores.jsonl`, verdicts `wrong`
+/ `stale`), the night can draft the repairs — never make them:
+
+```bash
+kura -s main dream-propose --scores scores.jsonl --cases cases.jsonl --utter utter.jsonl
+```
+
+One line per (case, slug) lands in `_still/dream-proposals.jsonl`
+(`{date, case_id, verdict, slug, kind, proposed, evidence, status}`), and `evidence`
+quotes the person's words verbatim from the kura-audit utterance index (`source` =
+conversation file:line). `kind` is one of three:
+
+- `supersede` — stale (the ruling was overturned) and wrong (written down wrongly)
+  alike, whenever the case carries an `answer`. A memory is never rewritten in place;
+  the old one stays as history. `proposed` is
+  `{"new_memory": {"slug": "<old-slug>-<YYYY-MM-DD>-<case_id>" (-2, -3 … is added if that name is already a memory; the whole name is normalised by the store's write rule — lowercase, other characters → `-` — before the check, so `_study/old` gets `study-old-…`, the name `kura remember` will really store), "title": "<answer, one line>",
+  "body": "正: <answer>。 + the verbatim quotes with their source + the case_id"},
+  "retire_old": "<old-slug>", "why": "<the old memory's line that disagrees + the
+  scorer's note>"}`. Names already held count as taken: every memory in the store, every
+  successor name left in the proposals file (pending or not — names of earlier runs are
+  reserved too), and every name handed out earlier in the same run, all compared after
+  normalisation and ignoring case; the name is chosen inside the proposals lock. A rerun
+  that replaces the same (case_id, slug) pending line keeps that line's successor name.
+  A person applies it with `kura remember` (the new memory) and then
+  `kura retire <old> <new> --manifest …` (old marked superseded by new).
+- `annotate` — only when the case has the person's quote but no `answer`: `proposed` is
+  `{"note": "<why it disagrees>", "quote": "<the verbatim quotes with their source>"}`,
+  a note to add to the old memory, never a guessed replacement.
+- `needs-human` — the quote is not found verbatim (or the memory / case is missing):
+  a `reason` and no proposal.
+
+Re-measuring (the number this is for). A proposal's `case_id` is the `id` of the same
+kura-audit `cases.jsonl` that life-meta's `tools/kura-audit/recall_check.py` reads
+(life-meta `tools/kura-audit/README.md`). After a person applies a proposal
+(OK → `remember` / `retire`), look at the next night's recall_check ledger: did that
+`case_id`'s verdict move from `wrong` / `miss` to `correct`? The per-type rates are in
+`<ledger name>.rates.jsonl` next to the ledger; the night before and the night after
+are the before/after comparison. recall_check counts a case `correct` when one of the
+case's `slugs` is picked, so when a `supersede` is applied, add the new memory's slug to
+that case's `slugs` in `cases.jsonl` too — otherwise the fixed memory is scored `miss`.
+
+Re-running replaces that case's `pending` line; lines moved off
+`pending` by a person are kept. No model is called, and nothing else in the store is
+written — applying a proposal is a person's act (back the store up first). Exit 2
+means there was no wrong/stale score to propose for. A `frozen` store is refused before
+anything is created (the `_still` workshop file is a store write too; exit 1). The
+checks before writing are the same as every other command's, in the same order: frozen,
+then substitution (a store directory swapped for a symlink since it was opened). A quote
+longer than three lines is kept whole in `evidence`, never cut: what matched is what is
+shown.
