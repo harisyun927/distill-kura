@@ -176,6 +176,13 @@ recall, its body untouched; `/map_budget` writes nothing. `tests/test_map_budget
 pins `read_counts()` to `map_budget.budget_order` as its only caller, and
 `tests/test_rooms.py` names this exception where the invariant is checked.
 
+#### Measuring whether it works
+
+- The number this moves is the operator's count of "we already decided that" / "that's wrong" (life-meta#709's way of counting). Recall's reply is unchanged, so it does not move the per-type accuracy of the `recall_check` regression test (life-meta#710); use that accuracy (nightly ledger `recall-nightly-ledger.jsonl` and `<ledger>.rates.jsonl`) only to confirm it has not dropped.
+- Before = the 14 days before the host (hook) starts using `/map_budget`, plus per-type accuracy that day. After = the same two numbers for the 14 days from the day it starts.
+- Write them, dated, in the "working memory" field of life-meta#1363. Merging distill-kura alone moves nothing; the numbers move once the host wears the new order.
+- "Falling off the budget map" is, on the kura side, only being ordered later (`order` lists every slug). What actually removes a line is the host's entry cap.
+
 **Never** hand-edit the woven cloth. It is derived; the next weave overwrites it. Edit
 the canonical `MEMORY.md`, or the memory itself, and re-weave.
 
