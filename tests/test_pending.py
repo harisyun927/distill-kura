@@ -214,6 +214,21 @@ def test_a_transient_failure_is_retried_a_bounded_number_of_times(tmp_path):
     assert len(d.models.brain.seen) == tries     # a shelf that waits for a person is quiet
 
 
+def test_a_shelf_that_waits_for_a_person_lets_the_scheduler_rest(tmp_path):
+    """life-meta#1363: not-retryable shelf entries are no work for the next pass.
+
+    Counted as `pending_left`, they kept `kura distill run` from ever answering
+    "nothing worth drinking" (exit 2), so tend relaunched every 15 s instead of
+    resting. They are still reported (`pending_stuck`) and never moved or dropped."""
+    d = distiller(tmp_path, lambda user, n: ("fail", DOWN))
+    for _ in range(MAX_ATTEMPTS + 1):
+        d.run(chunks=1)
+    assert shelf(d)[0]["retryable"] is False
+    r = d.run(chunks=1)
+    assert r == {"ok": True, "why": "nothing worth drinking", "pending_stuck": 1}
+    assert len(shelf(d)) == 1 and shelf(d)[0]["segments"]   # kept where it was
+
+
 # ── the scribe: same rule, one candidate at a time ───────────────────────
 
 def test_a_scribe_that_did_not_answer_keeps_the_candidate_for_the_next_pass(tmp_path):

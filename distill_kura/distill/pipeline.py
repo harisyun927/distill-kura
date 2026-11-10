@@ -1667,10 +1667,14 @@ class Distiller:
         Nothing is deleted until it has been drunk for real."""
         out = {"drafts": [], "dropped": 0, "covered": 0, "seeds": 0, "recurred": 0,
                "cue_receipts": 0, "cue_receipt_failures": 0, "composes_pending": 0,
-               "pending_done": 0, "pending_left": 0}
+               "pending_done": 0, "pending_left": 0, "pending_stuck": 0}
+        # A shelf entry marked not-retryable waits for a person, not for the next pass:
+        # it is counted apart (`pending_stuck`) so that it is still reported but never
+        # keeps the scheduler from resting (life-meta#1363 -- 133 such entries kept tend
+        # relaunching every 15 s instead of taking its 20-minute rest).
         for fp, rec in self.pending.load():
             if not rec.get("retryable", True):
-                out["pending_left"] += 1
+                out["pending_stuck"] += 1
                 continue
             segs = [Segment(s.get("cls", "SELF"), s.get("text", ""))
                     for s in (rec.get("segments") or [])]
@@ -1688,7 +1692,7 @@ class Distiller:
             out["pending_done"] += 0 if left else 1
         for fp, rec in self.pending_compose.load():
             if not rec.get("retryable", True):
-                out["pending_left"] += 1
+                out["pending_stuck"] += 1
                 continue
             c = rec.get("candidate") or {}
             attempt = int(rec.get("attempt", 1)) + 1
@@ -1810,15 +1814,20 @@ class Distiller:
                   "recurred": tally["recurred"], "seeds": tally["seeds"],
                   "cue_receipts": tally["cue_receipts"],
                   "cue_receipt_failures": tally["cue_receipt_failures"],
-                  "pending": tally["pending_left"] + tally["composes_pending"]}
+                  "pending": (tally["pending_left"] + tally["composes_pending"]
+                              + tally["pending_stuck"]),
+                  "pending_stuck": tally["pending_stuck"]}
         if pending_file:
             return {**answer, "why": "brain error", "pending_file": pending_file,
                     "reason": pending_reason}
         if not (made or tally["dropped"] or tally["covered"] or tally["seeds"]
                 or tally["pending_left"] or tally["composes_pending"]):
+            # Stuck shelf entries are not work this pass can do: still "nothing worth
+            # drinking" (exit 2), with the count carried so a person can see them.
+            stuck = {"pending_stuck": tally["pending_stuck"]} if tally["pending_stuck"] else {}
             if scan_pending_bytes:
-                return {"ok": True, "scan_pending_bytes": scan_pending_bytes}
-            return {"ok": True, "why": "nothing worth drinking"}
+                return {"ok": True, "scan_pending_bytes": scan_pending_bytes, **stuck}
+            return {"ok": True, "why": "nothing worth drinking", **stuck}
         if scan_pending_bytes:
             answer["scan_pending_bytes"] = scan_pending_bytes
         return answer
