@@ -103,7 +103,11 @@ _PREFILL_TYPES = {"window_tokens": int, "budget_fraction": float, "hard_fraction
                   # until a benchmark says otherwise. An untouched old config changes nothing.
                   "adaptive_triggers": bool, "adaptive_apply": bool, "trigger_steps": list,
                   # M6: what the resident block wears when the full map is over the ceiling.
-                  "resident_mode": str}
+                  "resident_mode": str,
+                  # life-meta#1363 PR-4: how many days a read keeps a memory forward
+                  # in the budget map's ORDER (`map_budget.py`). Order only. A whole
+                  # number of days >= 0; the range is checked in `_check_prefill`.
+                  "recent_read_days": int}
 # M6 resident modes, imported so there is one list: `full` (today's map), `auto`
 # (map while it fits, constellation over the ceiling), `constellation` (always).
 # Tier zero of recall (`fastpath.py`). `gate` is the honesty bar: a hit below it is
@@ -216,6 +220,13 @@ def _check_prefill(section: str, t: dict) -> None:
     if rm is not None and rm not in RESIDENT_MODES:
         raise ValueError(f"[{section}] resident_mode must be one of "
                          f"{list(RESIDENT_MODES)}, got {rm!r}")
+    # A negative window passed the type check and was refused only when `/map_budget`
+    # was asked, so a server started fine and then answered every budget request with
+    # 400 (Codex on distill-kura#11). Refused here, before the server takes traffic.
+    # The type is `int`, so TOML's `nan`/`inf` (floats) never reach this line.
+    rd = t.get("recent_read_days")
+    if rd is not None and rd < 0:
+        raise ValueError(f"[{section}] recent_read_days must be >= 0, got {rd!r}")
 
 
 def _check_unknown(where: str, table: dict, types: dict) -> None:
