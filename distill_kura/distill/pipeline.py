@@ -113,7 +113,8 @@ _HEAD_LINE = re.compile(r"^(" + "|".join(_HEAD_KEYS) + r"):[ \t]*(.*)$")
 # The shape SPOT_SYS / COVERAGE_SYS ask for: a bare JSON array of candidate objects.
 # Top level is an array on purpose — `salvage` takes every closed top-level `{...}`, so
 # an object wrapper ({"candidates": [...]}) would come back as one bogus candidate.
-# Only `topic`, `kind` and `why` are required; the gate judges the rest as before.
+# topic, kind, why and quotes are required (salvage keeps only objects with quotes or
+# kind "idea"; an idea may send []); the gate judges the rest as before.
 SPOT_SCHEMA = {
     "type": "array",
     "items": {
@@ -130,7 +131,7 @@ SPOT_SCHEMA = {
             "may_fade": {"type": "string"},
             "quotes": {"type": "array", "items": {"type": "string"}},
         },
-        "required": ["topic", "kind", "why"],
+        "required": ["topic", "kind", "why", "quotes"],
     },
 }
 
