@@ -103,7 +103,10 @@ _PREFILL_TYPES = {"window_tokens": int, "budget_fraction": float, "hard_fraction
                   # until a benchmark says otherwise. An untouched old config changes nothing.
                   "adaptive_triggers": bool, "adaptive_apply": bool, "trigger_steps": list,
                   # M6: what the resident block wears when the full map is over the ceiling.
-                  "resident_mode": str}
+                  "resident_mode": str,
+                  # life-meta#1363 PR-4: how many days a read keeps a memory forward
+                  # in the budget map's ORDER (`map_budget.py`). Order only.
+                  "recent_read_days": (int, float)}
 # M6 resident modes, imported so there is one list: `full` (today's map), `auto`
 # (map while it fits, constellation over the ceiling), `constellation` (always).
 # Tier zero of recall (`fastpath.py`). `gate` is the honesty bar: a hit below it is

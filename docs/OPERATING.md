@@ -147,6 +147,35 @@ code. Inspect it with `kura constellation` (`--json` for the counts), or watch
 to add `## ` headings to `MEMORY.md`. The trail still rides after the block when it
 fits, and a constellation that will not fit itself degrades to the honest stub.
 
+### A budget map that cannot wear everything: `/map_budget`
+
+A host whose injection is capped (a SessionStart hook with a 10,000-character limit)
+cannot wear the whole map, so it cuts `/prefill` down to a *budget map*. Which lines
+survive is an ORDER, and `GET /map_budget?store=main[&pinned=a,b]` hands it out:
+
+1. the `pinned` slugs the host names, in index order;
+2. memories read (recall's `_still/reads.jsonl`) within the last `recent_read_days`
+   days, most recently read first;
+3. everything else, newest first (index position from the end) — the old order.
+
+The reply also carries `note` (`最近参照を優先（30 日）`), one line the host puts in
+the budget map's header so a reader knows why these lines and not others. A store with
+no reads log gets exactly the old order and an empty `note`; nothing changes for it.
+
+Change the window per store with `recent_read_days` in `[prefill]` (or
+`[stores.<name>.prefill]`); the default (30) lives once, in
+`map_budget.DEFAULT_RECENT_READ_DAYS`. `0` keeps only reads from this very moment,
+which in practice turns the rule off.
+
+**The line crossed, and only this far.** Read counts are diagnostics everywhere else
+in this codebase. The operator decided (2026-11-10, life-meta#1363 PR-4) that they may
+steer the budget map's ORDER and nothing else: not retire, not drop/garage, not the
+ranking of recall, not `tend`. Falling off the budget map is not forgetting — the
+memory stays on the full map (`kura_map` / `/prefill`), readable by name, findable by
+recall, its body untouched; `/map_budget` writes nothing. `tests/test_map_budget.py`
+pins `read_counts()` to `map_budget.budget_order` as its only caller, and
+`tests/test_rooms.py` names this exception where the invariant is checked.
+
 **Never** hand-edit the woven cloth. It is derived; the next weave overwrites it. Edit
 the canonical `MEMORY.md`, or the memory itself, and re-weave.
 

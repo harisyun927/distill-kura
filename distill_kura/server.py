@@ -15,6 +15,9 @@ as you configure and a client can switch modes per request:
     GET  /glance/<slug>     ?store=maker   the ~150-token confirmation, exact
     GET  /prefill           ?store=eq[&format=text][&window=N][&fraction=F]
                             the resident index block, ready to paste
+    GET  /map_budget        ?store=eq[&pinned=a,b]
+                            the ORDER a budget map offers its lines to the cut:
+                            pinned → read in the last N days → newest (map_budget.py)
     GET  /profile           ?store=eq             the store's charter + persona pointer
     GET  /stores            what exists, which mode maps where, which models
     GET  /health            liveness — and which build/pid/config is actually serving
@@ -34,6 +37,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
+from . import map_budget
 from . import prefill as prefill_mod
 from .glance import glance
 from .recall import recall
@@ -176,6 +180,12 @@ def _make_handler(reg: Registry):
                     return self._send(200, pf.text, ctype="text/plain; charset=utf-8",
                                       headers=et)
                 return self._send(200, pf.as_dict(), headers=et)
+            if path == "/map_budget":
+                # An order, not a map: the host still cuts `/prefill` to its budget.
+                # The one place read counts steer anything (life-meta#1363 PR-4).
+                pinned = [x for x in (q.get("pinned") or "").split(",") if x]
+                return self._send(200, map_budget.plan(
+                    st, reg.prefill_cfg_for(st), pinned=pinned))
             if path == "/index":
                 t = st.index_text()
                 return self._send(200, {"store": st.name, "index": t,

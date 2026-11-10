@@ -102,20 +102,29 @@ def test_the_same_topic_in_two_rooms_makes_two_memories_and_copies_nothing(tmp_p
     assert all(reg.modes[r] == r for r in ROOMS)
 
 
-def test_no_router_and_no_move_exist_in_the_codebase():
+def test_no_router_and_no_move_exist_in_the_codebase_budget_map_order_excepted():
     """Spec 8.1: no path saves into another store without a chosen mode, and no
     move/copy function was added. Checked against the source, not a docstring."""
-    src = ""
+    src, src_but_budget_order = "", ""
     for dirpath, _, files in os.walk(os.path.join(ROOT, "distill_kura")):
         for f in files:
             if f.endswith(".py"):
-                src += open(os.path.join(dirpath, f), encoding="utf-8").read()
+                text = open(os.path.join(dirpath, f), encoding="utf-8").read()
+                src += text
+                if f != "map_budget.py":
+                    src_but_budget_order += text
     for word in ("def move_memory", "def copy_memory", "def migrate", "def auto_route",
                  "def classify_mode", "importance_score", "salience_score", "priority_score",
                  "recurrence_count"):
         assert word not in src, word
-    # read counts exist for diagnostics and are never consulted for a decision
-    assert not re.search(r"read_counts\(\)[^\n]*\n[^\n]*(rank|sort|prior|keep|drop)", src)
+    # read counts exist for diagnostics and are never consulted for a decision —
+    # with ONE exception (2026-11-10, life-meta#1363 PR-4): the ORDER of the budget
+    # map in `distill_kura/map_budget.py`, which is why that one file is left out of
+    # this scan. Retire / drop / recall ranking / tend stay on the old side of the
+    # line; where read_counts() may be called at all is pinned by
+    # tests/test_map_budget.py::test_read_counts_steer_only_the_budget_order.
+    assert not re.search(r"read_counts\(\)[^\n]*\n[^\n]*(rank|sort|prior|keep|drop)",
+                         src_but_budget_order)
 
 
 def test_a_mode_switch_affects_future_sessions_only_and_moves_nothing(tmp_path):
