@@ -77,10 +77,10 @@ _STORE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}[a-z0-9]$")
 # Keys a [stores.<name>] table may carry. Anything else is a typo until proven
 # otherwise; extensions use an `x_` prefix so they are visibly not ours.
 STORE_KEYS = {"path", "label", "readonly", "write_policy", "persona", "charter",
-              "model_profile"}
+              "model_profile", "owner"}
 NESTED_KEYS = {"distill", "prefill", "fastpath", "warm"}
 _TYPES = {"path": str, "label": str, "readonly": bool, "write_policy": str,
-          "persona": str, "charter": str, "model_profile": str,
+          "persona": str, "charter": str, "model_profile": str, "owner": (str, list),
           "distill": dict, "prefill": dict, "fastpath": dict, "warm": dict}
 # The nested tables need checking too: `inherit_global_journals = "false"` is a STRING,
 # therefore truthy, so a store inherited the global intake it had explicitly declined.
@@ -91,6 +91,79 @@ _DISTILL_TYPES = {"inherit_global_journals": bool, "journals": dict, "language":
                   "extend_mode": str,
                   # the watcher (`kura tend`)
                   "idle_min": (int, float), "backoff_min": (int, float), "yield_on_return": bool}
+# One entry of `[distill.journals]` / `[stores.<n>.distill.journals]`. The plain form is
+# a path under a key that names the journal format (`claude = "~/..."`). The table form
+# adds what a path cannot say: globs (one sessions directory holds every mode's
+# conversations), `kind` (the format, when the key is a label of its own -- two Claude
+# Code roots in one store need two names), and `speaker`: whose words the [USER] lines
+# are when they are NOT the store owner's (life-meta#1416). A colleague's conversation
+# distilled as the owner's decisions is the laundering the gate exists to prevent, one
+# step earlier, so the field is refused at load when it cannot mean what it says.
+_JOURNAL_TYPES = {"root": str, "kind": str, "speaker": str,
+                  "include_glob": list, "exclude_glob": list}
+SPEAKER_MAX = 80
+
+
+def _check_journals(section: str, journals: dict) -> None:
+    from .distill.sources import SOURCES      # local: the distiller imports this module
+    for name, spec in (journals or {}).items():
+        where = f"{section}.journals.{name}"
+        if isinstance(spec, str):
+            continue                          # the plain form, read exactly as before
+        if not isinstance(spec, dict):
+            raise ValueError(f"[{where}] must be a path or a table, "
+                             f"got {type(spec).__name__} ({spec!r})")
+        if "path" in spec and "root" not in spec:
+            # The one slip this table invites: every other table in kura.toml says
+            # `path`. Ignored, the journal would have no root and be drunk from nowhere.
+            raise ValueError(f"[{where}] names its directory `root`, not `path`")
+        _check_unknown(where, spec, _JOURNAL_TYPES)
+        _check_table(where, spec, _JOURNAL_TYPES)
+        if not spec.get("root", "").strip():
+            raise ValueError(f"[{where}] needs a `root` directory")
+        kind = spec.get("kind", name)
+        if kind not in SOURCES:
+            raise ValueError(f"[{where}] kind {kind!r} is not a journal format. "
+                             f"Known: {sorted(SOURCES)}. A key that is a label of its "
+                             f"own needs `kind = \"<format>\"`.")
+        for g in ("include_glob", "exclude_glob"):
+            if any(not isinstance(x, str) for x in spec.get(g) or []):
+                raise ValueError(f"[{where}] {g} must be a list of strings, "
+                                 f"got {spec[g]!r}")
+        sp = spec.get("speaker")
+        if sp is not None:
+            # It is pasted into the brain's and the scribe's prompts and into a
+            # memory's frontmatter: an empty one would say nothing while looking set,
+            # and a line break would start a new prompt line or frontmatter key.
+            if not sp.strip():
+                raise ValueError(f"[{where}] speaker is empty; leave it out for the "
+                                 f"store owner's own journal")
+            if any(ch in sp for ch in "\r\n\t") or len(sp) > SPEAKER_MAX:
+                raise ValueError(f"[{where}] speaker must be one line of at most "
+                                 f"{SPEAKER_MAX} characters, got {sp!r}")
+
+
+def _check_owner(name: str, owner) -> None:
+    """`owner` names the store's owner as a memory would write them (life-meta#1423):
+    one string or a list of them. Each is pasted into a prompt and becomes a word the
+    speaker floor refuses as a decider, so each must be one non-empty line of at most
+    SPEAKER_MAX characters. An empty list would look set and say nothing."""
+    if owner is None:
+        return
+    names = [owner] if isinstance(owner, str) else owner
+    if not names:
+        raise ValueError(f"[stores.{name}] owner is an empty list; leave it out instead")
+    for o in names:
+        if not isinstance(o, str):
+            raise ValueError(f"[stores.{name}] owner must be a string or a list of "
+                             f"strings, got {o!r}")
+        if not o.strip() or not re.split(r"[(（]", o, 1)[0].strip():
+            raise ValueError(f"[stores.{name}] owner {o!r} is empty")
+        if any(ch in o for ch in "\r\n\t") or len(o) > SPEAKER_MAX:
+            raise ValueError(f"[stores.{name}] owner must be one line of at most "
+                             f"{SPEAKER_MAX} characters, got {o!r}")
+
+
 # `append` writes an EXTENDS into the existing memory (the original behaviour);
 # `continue` leaves it untouched and writes a new memory that links back to it.
 EXTEND_MODES = ("append", "continue")
@@ -202,6 +275,7 @@ def _check_distill(section: str, t: dict) -> None:
     """The [distill] table's shape AND its one enumerated value. An `extend_mode`
     outside the two names is refused at load rather than read as the default."""
     _check_table(section, t, _DISTILL_TYPES)
+    _check_journals(section, t.get("journals") or {})
     em = t.get("extend_mode")
     if em is not None and em not in EXTEND_MODES:
         raise ValueError(f"[{section}] extend_mode must be one of "
@@ -260,6 +334,7 @@ def _check_table(where: str, table: dict, types: dict) -> None:
 
 def _check_types(name: str, sc: dict) -> None:
     _check_table(f"stores.{name}", sc, _TYPES)
+    _check_owner(name, sc.get("owner"))
     _check_distill(f"stores.{name}.distill", sc.get("distill") or {})
     _check_prefill(f"stores.{name}.prefill", sc.get("prefill") or {})
     _check_unknown(f"stores.{name}.fastpath", sc.get("fastpath") or {}, _FASTPATH_TYPES)

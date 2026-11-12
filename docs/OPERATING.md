@@ -459,6 +459,50 @@ language = "日本語"
 text = "~/notes/dialogue"
 ```
 
+### Someone else's conversations: `speaker`
+
+The charter reads every `[USER]` line as the store owner's words. When a journal holds
+somebody else's conversations (a colleague on their own machine), say whose they are,
+or their requests are written down as the owner's decisions:
+
+```toml
+[stores.eq.distill.journals]
+claude = "~/journals/eq"                                   # the owner's, as before
+colleague = { kind = "claude", root = "~/journals/eq-colleague", speaker = "Aki (sales)" }
+```
+
+- The table's key is a label; `kind` names the format (default: the key). `root`, not
+  `path`. Unknown keys, an empty `speaker`, a multi-line one or one over 80 characters
+  are refused at load.
+- A file belongs to the table that SELECTS it, root and globs alike, exactly as
+  discovery picks it: one sessions directory split by `include_glob` between the owner
+  (`own/**`) and a colleague (`other/**`) gives only the colleague's files a speaker.
+  The table's own `kind` must also read the file: `claude = "/j"` beside a
+  `{ kind = "text", root = "/j", speaker = .. }` leaves the `.jsonl` files the owner's.
+- For a file under that root, the brain (SPOT and the coverage pass) and the scribe
+  (new memories and EXTENDS) get one more paragraph after their task: the `[USER]` lines
+  are the speaker's words, not the owner's decisions, and a memory says whose they are.
+  The charter head is untouched, so the shared prefix stays byte-identical.
+- The evidence manifest records `speaker` (code's claim, from this config), and a new
+  memory poured from it carries `speaker:` in its frontmatter metadata. An EXTENDS does
+  not relabel the memory it extends; its manifest still records the speaker.
+- The final-surface floor knows it too. Every model-written surface from such a file
+  (the scribe's new memory, an EXTENDS, and a judge's FIX, whose speaker comes from the
+  verified manifest) is refused with `owner-attribution: <excerpt>` when it credits the
+  store owner with a decision ("the human decided", "the owner approved", "ユーザーが決めた"
+  and the floor's own owner words): the owner said nothing in that journal. A sentence
+  whose matched words name the speaker ("the user Yoichi asked") is the speaker's and
+  passes. The name counts only as a whole word: speaker `Ed` does not excuse "decided",
+  `耀一` does not excuse `耀一郎` (Latin ignores case; hiragana may touch a Japanese name). The scribe gets one retry with the violation named, as with every floor.
+- `[stores.<n>] owner = "Mina"` (or a list, `["ミナ", "Mina"]`; each one line, at most
+  80 characters) is what memories call the store owner. On a `speaker` journal the floor
+  then also refuses the owner by name as the decider ("ミナが決めた", "Mina decided",
+  "ミナの指示で") unless the speaker is the subject ("耀一がミナに聞いて決めた"), and the
+  speaker paragraph names the human ("calls the human (Mina)"). Unset: nothing changes.
+- A journal without `speaker` is read exactly as before: same prompts, same manifest
+  bytes, same floor. The other floors are unchanged — the speaker's words are still
+  `[USER]` evidence for everything else.
+
 ## Multiple kura on one server
 
 Everything is store-selectable, so one process is normally right. Watch two things:

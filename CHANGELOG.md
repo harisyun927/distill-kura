@@ -2,6 +2,19 @@
 
 ## 0.3.0
 
+- distill/registry: `[stores.<n>] owner` (a name or a list) says what memories call
+  the store owner. On a `speaker` journal the final-surface floor also refuses the owner
+  BY NAME as the decider (`owner-attribution:`), and the speaker paragraph names them.
+  Unset, prompts and verdicts are unchanged. (life-meta#1423) — unreleased
+- distill/registry: a journal table may carry `speaker` (whose words its `[USER]` lines
+  are, when not the store owner's) and `kind` (its format, so the key can be a label).
+  The brain and scribe prompts get one paragraph for such a journal; the evidence
+  manifest and a new memory's frontmatter record it. Journal tables are now checked at
+  load (unknown keys, `path` for `root`, unknown format). Plain path entries are
+  unchanged. For such a journal the final-surface floor (scribe, EXTENDS, a judge's
+  FIX) also refuses crediting the owner with a decision (`owner-attribution:`), and a
+  file's speaker follows the same root-and-glob selection as discovery.
+  (life-meta#1416) — unreleased
 - distill/store: `superseded` may now be proven ONLY by an exact, whole-line match of
   the one closed template `distill/retire_lane.py` already carried (`<old-slug> は
   [reason ending 役目終わり。] (退役して|やめて)、<new-slug> (に置き換える|に統合する)`),

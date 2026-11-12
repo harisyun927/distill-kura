@@ -268,14 +268,168 @@ def invented_quotations(surface: str, evidence: list[dict]) -> list[str]:
     return bad
 
 
+# A journal with a `speaker` holds someone else's [USER] words (life-meta#1416). Its
+# evidence can never back "the owner decided": the owner said nothing in it. The same
+# owner vocabulary the floor already knows (_ATTRIBUTES_TO_HUMAN), plus the generic
+# Japanese owner nouns, which only this floor reads -- it runs only for such a journal,
+# so the owner's own journals keep exactly the floor they had.
+# The owner vocabulary on a colleague's journal. The English line matches exactly what
+# `_ATTRIBUTES_TO_HUMAN`'s does; it only names the word between noun and verb (`gap`)
+# so the speaker excuse can read it. The Japanese line names the particle (`case`).
+_OWNER_AS_DECIDER = _ATTRIBUTES_TO_HUMAN[:2] + [
+    re.compile(r"\b(the user|the human|the owner|ken)\b\s+(?P<gap>\w*)\s*"
+               r"(decided|asked|approved|chose|instructed|said|ruled|confirmed)", re.I),
+    re.compile(r"(ユーザー|オーナー|持ち主|店主)(さん)?(?P<case>は|が|の)[^。\n]{0,20}?"
+               r"(決め|決定|指示|承認|選ん|選び|頼ん|依頼|裁定|確定)", re.I),
+]
+
+
+def _speaker_name(speaker: str) -> str:
+    """"Yoichi (web marketing)" -> "Yoichi": the name a sentence would use."""
+    return re.split(r"[(（]", speaker, 1)[0].strip()
+
+
+_LATIN = r"A-Za-z0-9_\u00C0-\u024F"
+_KANJI = r"\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆"
+_KATA = r"\u30A0-\u30FF\u31F0-\u31FF\uFF66-\uFF9F"
+
+
+def _edge_forbids(ch: str) -> str:
+    """Characters that may not touch a name on the side whose edge is `ch`.
+
+    Latin letters and digits never may (English `\\b`: "Ed" is not in "decided").
+    Beside a kanji edge no kanji, beside a katakana edge no katakana: "耀一" is not in
+    "耀一郎". Hiragana may always touch a Japanese name -- it is the particle that
+    follows it ("耀一が") or the の before it ("ユーザーの耀一")."""
+    cls = _LATIN
+    if re.match(f"[{_KANJI}]", ch):
+        cls += _KANJI
+    elif re.match(f"[{_KATA}]", ch):
+        cls += _KATA
+    return cls
+
+
+def _name_as_word(name: str):
+    """`name` as a whole word, case ignored (only Latin has case), or None."""
+    name = unicodedata.normalize("NFKC", name)
+    if not name:
+        return None
+    return re.compile(f"(?<![{_edge_forbids(name[0])}]){re.escape(name)}"
+                      f"(?![{_edge_forbids(name[-1])}])", re.I)
+
+
+_DECIDES_JA = r"(決め|決定|指示|承認|選ん|選び|頼ん|依頼|裁定|確定)"
+_DECIDES_EN = r"(decided|asked|approved|chose|instructed|said|ruled|confirmed)"
+# One word may sit between the name and the verb ("Ken quickly decided"), but not a
+# conjunction: in "Yoichi asked Ken and decided" the decider is Yoichi. Nor a passive
+# auxiliary: in "Ken was asked by Yoichi" Ken is the one asked, not the one deciding
+# ("Ken has decided" is still Ken's decision).
+_NOT_A_JOINER = (r"(?!(?:and|or|but|so|to|nor"
+                 r"|was|were|is|are|been|being|got|gets)\b)")
+
+
+def owner_names(owner) -> tuple[str, ...]:
+    """`[stores.<n>] owner` as the names a sentence would use, in order, deduplicated."""
+    if not owner:
+        return ()
+    names = [owner] if isinstance(owner, str) else list(owner)
+    out = []
+    for o in names:
+        n = _speaker_name(o) if isinstance(o, str) else ""
+        if n and n not in out:
+            out.append(n)
+    return tuple(out)
+
+
+def _owner_patterns(owner: str):
+    """The owner's name, as a word, followed by a decision verb (life-meta#1423)."""
+    w = _name_as_word(owner)
+    if w is None:
+        return []
+    n = w.pattern
+    return [
+        re.compile(n + r"(さん)?(?P<case>は|が|の)([^。\n]{0,20}?)" + _DECIDES_JA, re.I),
+        re.compile(n + r"(さん)?\s*[:：]", re.I),
+        re.compile(n + r"\s+(?:" + _NOT_A_JOINER + r"[\w'-]+\s+)?" + _DECIDES_EN, re.I),
+        re.compile(n + r"'s\s+(decision|instruction|approval|ruling|call)\b", re.I),
+    ]
+
+
+def _speaker_takes_over(text: str, m, sname: str) -> bool:
+    """Whether the owner word `m` found in `text` hands the decision to the speaker.
+
+    One rule for the owner nouns and the owner's name (life-meta#1423). The speaker's
+    name somewhere in the match does not excuse it: "ユーザーは耀一が出した案を承認した"
+    and "ミナは耀一が出した案を承認した" credit the owner -- 耀一が sits in a clause
+    modifying the noun. Only two shapes do:
+    - Japanese: the owner word is not the subject (its particle is の, never は/が) and
+      the speaker takes the subject before the verb ("ミナの話を聞いて耀一が決めた").
+      Searched in `text` from the particle to the end of the match -- the match's own
+      offsets, so a slug or title before the sentence changes nothing.
+    - English: the one word between the owner noun and the verb is the speaker's name,
+      as a whole word ("the user Yoichi asked"). "the user approved the plan Yoichi
+      submitted" has no such word and is refused."""
+    name = _name_as_word(sname)
+    if name is None:
+        return False
+    g = m.groupdict()
+    if g.get("case") == "の":
+        span = unicodedata.normalize("NFKC", text[m.end("case"):m.end()])
+        return bool(re.search(name.pattern + r"(さん)?(は|が)", span, re.I))
+    if g.get("gap"):
+        return bool(name.fullmatch(unicodedata.normalize("NFKC", g["gap"])))
+    return False
+
+
+def owner_attributions(surface: str, speaker: str | None, owners=()) -> list[str]:
+    """Excerpts where the text credits the store OWNER with a decision while every
+    [USER] word behind it is `speaker`'s. Empty when `speaker` is unset.
+
+    The owner is the owner nouns ("the human", "ユーザー") and each name of `owners`
+    (`[stores.<n>] owner`, life-meta#1423). A match passes only when the speaker takes
+    the decision inside it (`_speaker_takes_over`). The name counts only as a word --
+    speaker "Ed" does not excuse "The human decided", and "耀一" does not excuse
+    "耀一郎が決めた". English joiners never match a named owner: "Yoichi asked Ken and
+    decided" (the joiner rule above). An owner who shares the speaker's name is not
+    judged at all: every match would be the speaker's own."""
+    if not speaker:
+        return []
+    sname = _speaker_name(speaker)
+    out = []
+    for p in _OWNER_AS_DECIDER:
+        for m in p.finditer(surface):
+            if _speaker_takes_over(surface, m, sname):
+                continue
+            out.append(m.group(0)[:40])
+    key = unicodedata.normalize("NFKC", sname).casefold()
+    seen = set(out)
+    normed = unicodedata.normalize("NFKC", surface)
+    for o in owners or ():
+        if unicodedata.normalize("NFKC", o).casefold() == key:
+            continue
+        for p in _owner_patterns(o):
+            for m in p.finditer(normed):
+                if _speaker_takes_over(normed, m, sname):
+                    continue
+                ex = m.group(0)[:40]
+                if ex not in seen:
+                    seen.add(ex)
+                    out.append(ex)
+    return out
+
+
 def final_surface_violations(surface: str, evidence: list[dict], classes: list[str],
-                             allowed: str = "", known_slugs=None) -> list[str]:
+                             allowed: str = "", known_slugs=None,
+                             speaker: str | None = None, owners=()) -> list[str]:
     """The one door every model-written surface must pass before it earns a mark.
 
     `surface` is everything that will be stored or indexed: title, description,
     section heading, body, curation sentences — concatenation is fine, this is a
     floor, not a parser. `allowed` is text whose numbers CODE put there (an
-    extension heading's mechanically stamped date). Returns human-readable
+    extension heading's mechanically stamped date). `speaker` is the journal's, from
+    code (config or verified manifest), never the model: set, the [USER] quotes are
+    that person's and crediting the owner is refused too -- by the owner nouns, and
+    by name for each of `owners` (`[stores.<n>] owner`). Returns human-readable
     violations; empty means pass.
     """
     v = [f"invented number: {t}" for t in composed_number_violations(surface, evidence, allowed)]
@@ -286,6 +440,8 @@ def final_surface_violations(surface: str, evidence: list[dict], classes: list[s
         v.append("unknown links: " + ", ".join(dead))
     for q in invented_quotations(surface, evidence):
         v.append(f"invented quotation: {q[:24]}…")
+    for a in owner_attributions(surface, speaker, owners):
+        v.append(f"owner-attribution: {a}")
     return v
 
 

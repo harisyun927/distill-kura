@@ -181,6 +181,9 @@ class Store:
     model_profile: str | None = None    # which [model_profiles.<name>] this store may use
     persona: str | None = None          # path to persona.json (defaults to <path>/persona.json)
     charter: str | None = None          # path to charter.md  (defaults to <path>/charter.md)
+    # What the store's owner is called in a memory (life-meta#1423): one name or a
+    # list. Read only by the speaker floor; None keeps every store as it was.
+    owner: str | list | None = None
     extra: dict = field(default_factory=dict)
 
     # ── paths ────────────────────────────────────────────────────────────

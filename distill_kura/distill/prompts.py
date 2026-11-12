@@ -333,3 +333,39 @@ Rules:
   automatically.
 
 Output only the profile, starting with the first heading."""
+
+
+# life-meta#1416: a journal may hold someone else's conversations -- a colleague's, on a
+# machine the store owner does not use. The charter reads [USER] as the owner's words;
+# without this paragraph the colleague's requests are written down as the owner's
+# decisions. Appended AFTER the task, so the charter head stays byte-identical, and
+# only for a journal that names a speaker: every other prompt is unchanged.
+SPEAKER_NOTE = """
+
+[Whose words the [USER] lines are]
+In this material every [USER] line is spoken by {speaker} -- NOT by the person this
+store's charter calls the human{owner}. They are not that person's decisions, rulings or
+instructions. Read them as {speaker}'s own words: what {speaker} asked, reported or
+decided within their own work. When a memory rests on them, the memory says so in
+its own language (for example "{speaker}の言葉:" / "according to {speaker}") and
+never turns them into the owner's decision."""
+
+
+def speaker_note(speaker: str | None, *, braced: bool = False, owners=()) -> str:
+    """The paragraph for `speaker`, or "" for the owner's own journal. `braced` doubles
+    the braces for a task that is `.format()`ed afterwards (the scribe's). `owners`
+    (`[stores.<n>] owner`, life-meta#1423) names the human in brackets; without it the
+    paragraph is byte-for-byte what it was."""
+    if not speaker:
+        return ""
+    owner = f" ({' / '.join(owners)})" if owners else ""
+    note = SPEAKER_NOTE.format(speaker=speaker, owner=owner)
+    return note.replace("{", "{{").replace("}", "}}") if braced else note
+
+
+def speaker_line(speaker: str | None) -> str:
+    """The same fact at the head of the scribe's packet, beside the evidence it is about."""
+    if not speaker:
+        return ""
+    return (f"SPEAKER: every [USER] line below is {speaker}'s words, not the store "
+            f"owner's decision. Write them as {speaker}'s.\n")
