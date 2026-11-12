@@ -90,6 +90,11 @@ def test_owner_names_strips_and_dedups():
     "Mina quickly decided on the slow disk.",
     "Mina's decision: the slow disk.",
     "ミナが耀一の案を承認した",              # the speaker's name inside does not excuse it
+    "ミナは耀一が出した案を承認した",        # 耀一が modifies the noun; ミナ approved
+    "ミナが、耀一が出した案を承認した",
+    "Mina asked for the slow disk.",
+    "Mina then asked for the slow disk.",
+    "Mina has decided on the slow disk.",    # has is not a passive auxiliary
 ])
 def test_naming_the_owner_as_the_decider_is_refused(text):
     v = _floor(text, speaker="耀一（Web）" if "耀一" in text else SPEAKER)
@@ -101,6 +106,9 @@ def test_naming_the_owner_as_the_decider_is_refused(text):
     ("ミナの話を聞いて耀一が決めた", "耀一（Web）"),      # the speaker takes over
     ("Yoichi asked Mina and decided on the slow disk.", SPEAKER),
     ("Yoichi decided after talking to Mina.", SPEAKER),
+    ("Mina was asked by Yoichi to keep the archive.", SPEAKER),   # passive: Mina was asked
+    ("Mina got asked by Yoichi about the disk.", SPEAKER),
+    ("Mina is approved as a reviewer by Yoichi.", SPEAKER),
     ("ミナミが保管先を決めた", SPEAKER),                 # a longer name is another person
     ("Minato decided on the slow disk.", SPEAKER),
     ("The archive goes on the slow disk.", SPEAKER),

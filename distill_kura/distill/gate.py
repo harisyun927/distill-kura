@@ -316,8 +316,11 @@ def _name_as_word(name: str):
 _DECIDES_JA = r"(決め|決定|指示|承認|選ん|選び|頼ん|依頼|裁定|確定)"
 _DECIDES_EN = r"(decided|asked|approved|chose|instructed|said|ruled|confirmed)"
 # One word may sit between the name and the verb ("Ken quickly decided"), but not a
-# conjunction: in "Yoichi asked Ken and decided" the decider is Yoichi.
-_NOT_A_JOINER = r"(?!(?:and|or|but|so|to|nor)\b)"
+# conjunction: in "Yoichi asked Ken and decided" the decider is Yoichi. Nor a passive
+# auxiliary: in "Ken was asked by Yoichi" Ken is the one asked, not the one deciding
+# ("Ken has decided" is still Ken's decision).
+_NOT_A_JOINER = (r"(?!(?:and|or|but|so|to|nor"
+                 r"|was|were|is|are|been|being|got|gets)\b)")
 
 
 def owner_names(owner) -> tuple[str, ...]:
@@ -340,7 +343,7 @@ def _owner_patterns(owner: str):
         return []
     n = w.pattern
     return [
-        re.compile(n + r"(さん)?(は|が|の)([^。\n]{0,20}?)" + _DECIDES_JA, re.I),
+        re.compile(n + r"(さん)?(?P<case>は|が|の)([^。\n]{0,20}?)" + _DECIDES_JA, re.I),
         re.compile(n + r"(さん)?\s*[:：]", re.I),
         re.compile(n + r"\s+(?:" + _NOT_A_JOINER + r"[\w'-]+\s+)?" + _DECIDES_EN, re.I),
         re.compile(n + r"'s\s+(decision|instruction|approval|ruling|call)\b", re.I),
@@ -365,11 +368,15 @@ def owner_attributions(surface: str, speaker: str | None, owners=()) -> list[str
             if name and name.search(unicodedata.normalize("NFKC", m.group(0))):
                 continue
             out.append(m.group(0)[:40])
-    # The owner by the name `[stores.<n>] owner` gives (life-meta#1423). Here the name
-    # is the subject, so the speaker's name inside the match does not excuse it ("ケン
-    # が耀一の案を承認した" credits the owner) -- unless the speaker takes over as the
-    # subject before the verb ("ケンの話を聞いて耀一が決めた"). An owner who shares the
-    # speaker's name is not judged at all: every match would be the speaker's own.
+    # The owner by the name `[stores.<n>] owner` gives (life-meta#1423). The speaker's
+    # name inside the match does not excuse it ("ケンが耀一の案を承認した" credits the
+    # owner) -- unless the owner is not the subject at all (only "ケンの", never "ケン
+    # は/が") and the speaker then takes the subject before the verb ("ケンの話を聞いて
+    # 耀一が決めた"). "ケンは耀一が出した案を承認した" stays refused: ケン is the
+    # subject, 耀一が sits inside a clause modifying the noun. English has no excuse:
+    # "Yoichi asked Ken and decided" never matches (the joiner rule above). An owner who
+    # shares the speaker's name is not judged at all: every match would be the
+    # speaker's own.
     taken_over = (re.compile(name.pattern + r"(さん)?(は|が)", re.I) if name else None)
     key = unicodedata.normalize("NFKC", sname).casefold()
     seen = set(out)
@@ -378,7 +385,9 @@ def owner_attributions(surface: str, speaker: str | None, owners=()) -> list[str
             continue
         for p in _owner_patterns(o):
             for m in p.finditer(unicodedata.normalize("NFKC", surface)):
-                if taken_over and taken_over.search(m.group(0)):
+                case = m.groupdict().get("case")
+                if (case == "の" and taken_over
+                        and taken_over.search(m.group(0), m.end("case"))):
                     continue
                 ex = m.group(0)[:40]
                 if ex not in seen:
