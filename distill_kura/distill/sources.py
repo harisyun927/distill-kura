@@ -143,6 +143,11 @@ class Source:
     def discover(self, root: str) -> list[str]:
         raise NotImplementedError
 
+    def finds(self, path: str) -> bool:
+        """Would `discover` return `path` from a root that holds it? The same test,
+        one file at a time, so `speaker_for` agrees with discovery about formats."""
+        return self.matches(path)
+
     def sip(self, path: str, start: int, limit_chars: int,
             report: IntakeReport | None = None) -> tuple[list[Segment], int]:
         """Read past the watermark. Returns (segments, new watermark).
@@ -360,6 +365,9 @@ class DshSource(Source):
     def discover(self, root: str) -> list[str]:
         return sorted(glob.glob(os.path.join(root, "**", "session.jsonl.zstd"), recursive=True),
                       key=os.path.getmtime, reverse=True)
+
+    def finds(self, path: str) -> bool:
+        return os.path.basename(path) == "session.jsonl.zstd"
 
     @staticmethod
     def _lines(path: str):
@@ -1113,6 +1121,49 @@ def source_for(path: str) -> Source | None:
     return None
 
 
+def speaker_for(roots: dict, path: str) -> str | None:
+    """Whose words the [USER] lines of `path` are, when its journal says so.
+
+    None -- the store owner's, as always -- unless a table with a `speaker` holds the
+    file (life-meta#1416). Read from the path rather than carried on the segments, so a
+    shelved batch or candidate (which keeps its path) gets the same answer on retry."""
+    if not path:
+        return None
+    # The table must SELECT the file the way discovery does -- root and globs -- not
+    # merely hold it: one root split by globs between the owner (`own/**`) and a
+    # colleague (`other/**`) is what globs are for, and the root alone would give the
+    # owner's files the colleague's name. And the table's own adapter must find the
+    # file: `claude = "/j"` beside `aki = { kind = "text", root = "/j", speaker = .. }`
+    # leaves every .jsonl there the owner's -- the text adapter never reads them.
+    for key, spec in (roots or {}).items():
+        if isinstance(spec, dict) and str(spec.get("speaker") or "").strip():
+            src = SOURCES.get(spec.get("kind", key))
+            if not src or not src.finds(path):
+                continue
+            root = os.path.expanduser(str(spec.get("root", "")))
+            if root and contained(root, path) and _select(
+                    root, spec.get("include_glob") or [],
+                    spec.get("exclude_glob") or [], [path]):
+                return str(spec["speaker"]).strip()
+    return None
+
+
+def _select(root: str, include: list[str], exclude: list[str],
+            found: list[str]) -> list[str]:
+    """`found` narrowed by a journal table's globs -- discovery's rule, shared with
+    `speaker_for` so the two can never disagree about which table holds a file."""
+    if include:
+        keep: list[str] = []
+        for pat in include:
+            keep += glob.glob(os.path.join(root, pat), recursive=True)
+        keep_set = set(keep)
+        found = [f for f in found if f in keep_set]
+    for pat in exclude:
+        dropped = set(glob.glob(os.path.join(root, pat), recursive=True))
+        found = [f for f in found if f not in dropped]
+    return found
+
+
 def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[str]:
     """Journals to drink from, newest first — today's decisions are worth the most.
 
@@ -1122,6 +1173,12 @@ def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[st
         {"dsh": {"root": "~/dsh/sessions-maker",
                  "include_glob": ["**/session.jsonl.zstd"],
                  "exclude_glob": ["**/scratch/**"]}}
+        {"yoichi": {"kind": "claude", "root": "~/journals/yoichi",
+                    "speaker": "Yoichi (web marketing)"}}
+
+    A table's `kind` names the format when its key is a label (default: the key).
+    `speaker` does not change what is found; `speaker_for` reads it, through the
+    same root-and-glob selection.
 
     Per-source globs exist because one sessions directory usually holds every mode's
     conversations. Pointing two stores at it distils all of them into both: the memory
@@ -1134,6 +1191,8 @@ def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[st
     """
     files: list[str] = []
     for kind, spec in (roots or {}).items():
+        if isinstance(spec, dict):
+            kind = spec.get("kind", kind)
         src = SOURCES.get(kind)
         if not src:
             continue
@@ -1145,16 +1204,7 @@ def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[st
             root, include, exclude = os.path.expanduser(str(spec)), [], []
         if not root or not os.path.isdir(root):
             continue
-        found = src.discover(root)
-        if include:
-            keep: list[str] = []
-            for pat in include:
-                keep += glob.glob(os.path.join(root, pat), recursive=True)
-            found = [f for f in found if f in set(keep)]
-        for pat in exclude:
-            dropped = set(glob.glob(os.path.join(root, pat), recursive=True))
-            found = [f for f in found if f not in dropped]
-        files += found
+        files += _select(root, include, exclude, src.discover(root))
     for root in (exclude_roots or []):
         files = [f for f in files if not contained(root, f)]
     # Path exclusion is not enough: a HARDLINK to a memory, sitting in an otherwise clean

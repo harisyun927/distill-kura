@@ -91,6 +91,58 @@ _DISTILL_TYPES = {"inherit_global_journals": bool, "journals": dict, "language":
                   "extend_mode": str,
                   # the watcher (`kura tend`)
                   "idle_min": (int, float), "backoff_min": (int, float), "yield_on_return": bool}
+# One entry of `[distill.journals]` / `[stores.<n>.distill.journals]`. The plain form is
+# a path under a key that names the journal format (`claude = "~/..."`). The table form
+# adds what a path cannot say: globs (one sessions directory holds every mode's
+# conversations), `kind` (the format, when the key is a label of its own -- two Claude
+# Code roots in one store need two names), and `speaker`: whose words the [USER] lines
+# are when they are NOT the store owner's (life-meta#1416). A colleague's conversation
+# distilled as the owner's decisions is the laundering the gate exists to prevent, one
+# step earlier, so the field is refused at load when it cannot mean what it says.
+_JOURNAL_TYPES = {"root": str, "kind": str, "speaker": str,
+                  "include_glob": list, "exclude_glob": list}
+SPEAKER_MAX = 80
+
+
+def _check_journals(section: str, journals: dict) -> None:
+    from .distill.sources import SOURCES      # local: the distiller imports this module
+    for name, spec in (journals or {}).items():
+        where = f"{section}.journals.{name}"
+        if isinstance(spec, str):
+            continue                          # the plain form, read exactly as before
+        if not isinstance(spec, dict):
+            raise ValueError(f"[{where}] must be a path or a table, "
+                             f"got {type(spec).__name__} ({spec!r})")
+        if "path" in spec and "root" not in spec:
+            # The one slip this table invites: every other table in kura.toml says
+            # `path`. Ignored, the journal would have no root and be drunk from nowhere.
+            raise ValueError(f"[{where}] names its directory `root`, not `path`")
+        _check_unknown(where, spec, _JOURNAL_TYPES)
+        _check_table(where, spec, _JOURNAL_TYPES)
+        if not spec.get("root", "").strip():
+            raise ValueError(f"[{where}] needs a `root` directory")
+        kind = spec.get("kind", name)
+        if kind not in SOURCES:
+            raise ValueError(f"[{where}] kind {kind!r} is not a journal format. "
+                             f"Known: {sorted(SOURCES)}. A key that is a label of its "
+                             f"own needs `kind = \"<format>\"`.")
+        for g in ("include_glob", "exclude_glob"):
+            if any(not isinstance(x, str) for x in spec.get(g) or []):
+                raise ValueError(f"[{where}] {g} must be a list of strings, "
+                                 f"got {spec[g]!r}")
+        sp = spec.get("speaker")
+        if sp is not None:
+            # It is pasted into the brain's and the scribe's prompts and into a
+            # memory's frontmatter: an empty one would say nothing while looking set,
+            # and a line break would start a new prompt line or frontmatter key.
+            if not sp.strip():
+                raise ValueError(f"[{where}] speaker is empty; leave it out for the "
+                                 f"store owner's own journal")
+            if any(ch in sp for ch in "\r\n\t") or len(sp) > SPEAKER_MAX:
+                raise ValueError(f"[{where}] speaker must be one line of at most "
+                                 f"{SPEAKER_MAX} characters, got {sp!r}")
+
+
 # `append` writes an EXTENDS into the existing memory (the original behaviour);
 # `continue` leaves it untouched and writes a new memory that links back to it.
 EXTEND_MODES = ("append", "continue")
@@ -202,6 +254,7 @@ def _check_distill(section: str, t: dict) -> None:
     """The [distill] table's shape AND its one enumerated value. An `extend_mode`
     outside the two names is refused at load rather than read as the default."""
     _check_table(section, t, _DISTILL_TYPES)
+    _check_journals(section, t.get("journals") or {})
     em = t.get("extend_mode")
     if em is not None and em not in EXTEND_MODES:
         raise ValueError(f"[{section}] extend_mode must be one of "
