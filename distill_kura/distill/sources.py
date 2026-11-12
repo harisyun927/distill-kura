@@ -1113,6 +1113,22 @@ def source_for(path: str) -> Source | None:
     return None
 
 
+def speaker_for(roots: dict, path: str) -> str | None:
+    """Whose words the [USER] lines of `path` are, when its journal says so.
+
+    None -- the store owner's, as always -- unless a table with a `speaker` holds the
+    file (life-meta#1416). Read from the path rather than carried on the segments, so a
+    shelved batch or candidate (which keeps its path) gets the same answer on retry."""
+    if not path:
+        return None
+    for spec in (roots or {}).values():
+        if isinstance(spec, dict) and str(spec.get("speaker") or "").strip():
+            root = os.path.expanduser(str(spec.get("root", "")))
+            if root and contained(root, path):
+                return str(spec["speaker"]).strip()
+    return None
+
+
 def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[str]:
     """Journals to drink from, newest first — today's decisions are worth the most.
 
@@ -1122,6 +1138,11 @@ def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[st
         {"dsh": {"root": "~/dsh/sessions-maker",
                  "include_glob": ["**/session.jsonl.zstd"],
                  "exclude_glob": ["**/scratch/**"]}}
+        {"yoichi": {"kind": "claude", "root": "~/journals/yoichi",
+                    "speaker": "Yoichi (web marketing)"}}
+
+    A table's `kind` names the format when its key is a label (default: the key).
+    `speaker` does not change what is found; `speaker_for` reads it.
 
     Per-source globs exist because one sessions directory usually holds every mode's
     conversations. Pointing two stores at it distils all of them into both: the memory
@@ -1134,6 +1155,8 @@ def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[st
     """
     files: list[str] = []
     for kind, spec in (roots or {}).items():
+        if isinstance(spec, dict):
+            kind = spec.get("kind", kind)
         src = SOURCES.get(kind)
         if not src:
             continue

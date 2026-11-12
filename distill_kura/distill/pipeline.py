@@ -42,7 +42,7 @@ from .gate import (attributes_to_human, composed_number_violations,
                    final_surface_violations, gate, norm, salvage, verify_tags)
 from .pending import MAX_ATTEMPTS, PendingShelf, failure_kind
 from .seeds import Seeds
-from .sources import Segment, as_evidence, call_claim_bound, call_sip, discover_all, source_for, IntakeReport, SCAN_LIMIT
+from .sources import Segment, as_evidence, call_claim_bound, call_sip, discover_all, source_for, speaker_for, IntakeReport, SCAN_LIMIT
 from .watermark import Watermarks
 
 
@@ -300,6 +300,16 @@ class Distiller:
             os.makedirs(self.drafts_dir, exist_ok=True)
         self._store_text: str | None = None
 
+    # ── whose words the batch holds (life-meta#1416) ──────────────────────
+    def speaker_of(self, path: str | None) -> str | None:
+        """The journal's `speaker` for `path`, or None for the store owner's own.
+        The writer bench builds its compose object without journals
+        (`bench_writers._composition_distiller`): no journal, no speaker."""
+        return speaker_for(getattr(self, "journals", None) or {}, path or "")
+
+    def _speaker(self) -> str | None:
+        return self.speaker_of(getattr(self, "_current_source", "") or "")
+
     # ── model roles (charter first, byte-identical, for the shared prefix) ──
     def _sys(self, task: str) -> str:
         return self.charter + "\n──────────\n" + task
@@ -371,9 +381,10 @@ class Distiller:
         rolled back), that stretch was gone for good. The caller shelves the batch on
         a failure instead; here we only tell the two apart."""
         limit = max_items or self.max_items
+        note = prompts.speaker_note(self._speaker())
         try:
             raw = self._brain_json(
-                prompts.SPOT_SYS.format(max_items=limit, language=self.language),
+                prompts.SPOT_SYS.format(max_items=limit, language=self.language) + note,
                 as_evidence(segs), 5000)
         except Exception as e:                  # a socket that died mid-read, say
             return [], {"reason": "transient", "detail": f"{type(e).__name__}: {e}"}
@@ -399,7 +410,7 @@ class Distiller:
             already = "\n".join(f"- {c.get('topic')}: {c.get('why')}" for c in found)
             more = salvage(self._brain_json(
                 prompts.COVERAGE_SYS.format(max_items=limit - len(found),
-                                            language=self.language),
+                                            language=self.language) + note,
                 f"=== ALREADY TAKEN ===\n{already or '(nothing yet)'}\n\n"
                 f"=== THE MATERIAL ===\n{as_evidence(segs)}", 5000))
             if not more:
@@ -649,7 +660,9 @@ class Distiller:
         if "USER" not in c["classes"]:
             warn += ("⚠️ There is NOT ONE word of the human's in this candidate. Do not write "
                      "that they decided, chose, or instructed anything.\n")
-        user = (f"CANDIDATE: {c.get('topic')}\nKIND: {c.get('kind')}\n"
+        speaker = self._speaker()
+        user = (prompts.speaker_line(speaker) +
+                f"CANDIDATE: {c.get('topic')}\nKIND: {c.get('kind')}\n"
                 f"The distiller's reading (**not evidence — never cite it**): "
                 f"{c.get('why')}\n{warn}\n"
                 f"=== EVIDENCE (this is everything) ===\n{ev}\n\n"
@@ -658,7 +671,8 @@ class Distiller:
         # The scribe is a model: its finished text gets the same deterministic floor
         # as the candidate's quotes did. One retry with the violations named, then drop.
         for attempt in (1, 2):
-            out = scribe_call(prompts.SCRIBE_SYS, user)
+            out = scribe_call(prompts.SCRIBE_SYS
+                              + prompts.speaker_note(speaker, braced=True), user)
             if out is None and failures is not None:
                 # A transport fact, not a verdict: the caller keeps the candidate and
                 # its evidence for another try instead of losing it to a bad minute.
@@ -787,7 +801,9 @@ class Distiller:
             scribe_call = self.scribe
         if error_endpoint is None:
             error_endpoint = self.models.scribe
-        out = scribe_call(prompts.EXTEND_SYS,
+        speaker = self._speaker()
+        out = scribe_call(prompts.EXTEND_SYS + prompts.speaker_note(speaker, braced=True),
+                          prompts.speaker_line(speaker) +
                           f"MEMORY TO EXTEND: {target}\nDATE: {date}\n"
                           f"The distiller's reading (not evidence): {c.get('extends_why')}\n\n"
                           f"=== ALREADY WRITTEN THERE (do not repeat) ===\n{existing[:9000]}\n\n"
@@ -887,6 +903,12 @@ class Distiller:
             manifest["routing_cues"] = d["routing_cues"]
             if d.get("routing_cues_refused"):
                 manifest["routing_cues_refused"] = d["routing_cues_refused"]
+        # Whose words the [USER] quotes are, when they are not the owner's
+        # (life-meta#1416). Code's claim, from the journal's config, never the model's.
+        # Absent for the owner's own journal, so those manifests keep their bytes.
+        speaker = self.speaker_of(source)
+        if speaker:
+            manifest["speaker"] = speaker
         blob = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=1)
         digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
         path = os.path.join(self._evidence_dir(), f"{digest}.json")
@@ -1093,10 +1115,19 @@ class Distiller:
         # The pour has been through the gate, so it uses the verified door: a store set
         # to `distiller-only` accepts this and refuses a bare tool call.
         man = re.search(r"evidence_manifest:\s*(sha256:[0-9a-f]{64})", self._draft_head(raw))
+        meta = {"evidence_manifest": man.group(1)} if man else None
+        # A new memory resting on someone else's words says whose, in its frontmatter
+        # (life-meta#1416) -- read from the VERIFIED manifest, never the draft text. An
+        # EXTENDS adds a section to a memory that has its own origin, so it does not
+        # relabel the whole file; its manifest still records the speaker.
+        if man and not head.get("EXTENDS"):
+            vm0 = self.store.load_manifest_verified(man.group(1).split("sha256:", 1)[-1])
+            if vm0 and isinstance(vm0.get("speaker"), str) and vm0["speaker"].strip():
+                meta["speaker"] = vm0["speaker"].strip()
         r = self.store.pour_verified(slug_out, desc, new_body,
                                      type_=kind.group(1) if kind else "project",
                                      title=title,
-                                     meta={"evidence_manifest": man.group(1)} if man else None,
+                                     meta=meta,
                                      tags=tags, annotations=ann)
         if r.get("ok"):
             # Numbered, like the staging side: a later draft of the same slug is

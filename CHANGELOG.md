@@ -2,6 +2,12 @@
 
 ## 0.3.0
 
+- distill/registry: a journal table may carry `speaker` (whose words its `[USER]` lines
+  are, when not the store owner's) and `kind` (its format, so the key can be a label).
+  The brain and scribe prompts get one paragraph for such a journal; the evidence
+  manifest and a new memory's frontmatter record it. Journal tables are now checked at
+  load (unknown keys, `path` for `root`, unknown format). Plain path entries are
+  unchanged. (life-meta#1416) — unreleased
 - distill/store: `superseded` may now be proven ONLY by an exact, whole-line match of
   the one closed template `distill/retire_lane.py` already carried (`<old-slug> は
   [reason ending 役目終わり。] (退役して|やめて)、<new-slug> (に置き換える|に統合する)`),

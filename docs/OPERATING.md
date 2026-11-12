@@ -459,6 +459,32 @@ language = "日本語"
 text = "~/notes/dialogue"
 ```
 
+### Someone else's conversations: `speaker`
+
+The charter reads every `[USER]` line as the store owner's words. When a journal holds
+somebody else's conversations (a colleague on their own machine), say whose they are,
+or their requests are written down as the owner's decisions:
+
+```toml
+[stores.eq.distill.journals]
+claude = "~/journals/eq"                                   # the owner's, as before
+colleague = { kind = "claude", root = "~/journals/eq-colleague", speaker = "Ken (sales)" }
+```
+
+- The table's key is a label; `kind` names the format (default: the key). `root`, not
+  `path`. Unknown keys, an empty `speaker`, a multi-line one or one over 80 characters
+  are refused at load.
+- For a file under that root, the brain (SPOT and the coverage pass) and the scribe
+  (new memories and EXTENDS) get one more paragraph after their task: the `[USER]` lines
+  are the speaker's words, not the owner's decisions, and a memory says whose they are.
+  The charter head is untouched, so the shared prefix stays byte-identical.
+- The evidence manifest records `speaker` (code's claim, from this config), and a new
+  memory poured from it carries `speaker:` in its frontmatter metadata. An EXTENDS does
+  not relabel the memory it extends; its manifest still records the speaker.
+- A journal without `speaker` is read exactly as before: same prompts, same manifest
+  bytes. The gate and the floors are unchanged — the speaker's words are still `[USER]`
+  evidence, so "never credit the human without their quoted words" still holds.
+
 ## Multiple kura on one server
 
 Everything is store-selectable, so one process is normally right. Watch two things:
