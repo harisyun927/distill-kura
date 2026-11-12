@@ -206,3 +206,32 @@ def test_the_scribe_cannot_name_the_owner_as_the_decider(tmp_path):
 def test_without_owner_the_same_draft_is_taken(tmp_path):
     d = _distiller(tmp_path, SPEAKER, owner=None, scribe=SCRIBE_NAMING_OWNER)
     assert d.run(chunks=1).get("drafts")
+
+
+# ── the owner nouns follow the same rule as the owner's name ─────────────
+
+@pytest.mark.parametrize("text", [
+    "ユーザーは耀一が出した案を承認した",
+    "オーナーが、耀一が出した案を承認した",
+    "ユーザーは耀一と保管先を決めた",
+    "the user approved the plan Yoichi submitted",
+])
+def test_an_owner_noun_with_the_speaker_inside_is_refused(text):
+    v = _floor(text, speaker="耀一（Web）" if "耀一" in text else SPEAKER, owners=())
+    assert v and all(x.startswith("owner-attribution: ") for x in v), v
+
+
+@pytest.mark.parametrize("text, speaker", [
+    ("ユーザーの話を聞いて耀一が決めた", "耀一（Web）"),
+    ("the user Yoichi asked to put the archive on the slow disk.", SPEAKER),
+])
+def test_an_owner_noun_the_speaker_takes_over_passes(text, speaker):
+    assert _floor(text, speaker=speaker, owners=()) == []
+
+
+def test_the_excuse_reads_the_match_in_the_whole_surface():
+    # Codex P2: a slug and title before the sentence (the composed surface).
+    head = "archive-on-slow-disk\nArchive\n"
+    assert _floor(head + "ミナの話を聞いて耀一が決めた", speaker="耀一（Web）") == []
+    assert _floor(head + "ユーザーの話を聞いて耀一が決めた", speaker="耀一（Web）") == []
+    assert _floor(head + "ミナは耀一が出した案を承認した", speaker="耀一（Web）")

@@ -273,8 +273,13 @@ def invented_quotations(surface: str, evidence: list[dict]) -> list[str]:
 # owner vocabulary the floor already knows (_ATTRIBUTES_TO_HUMAN), plus the generic
 # Japanese owner nouns, which only this floor reads -- it runs only for such a journal,
 # so the owner's own journals keep exactly the floor they had.
-_OWNER_AS_DECIDER = _ATTRIBUTES_TO_HUMAN + [
-    re.compile(r"(ユーザー|オーナー|持ち主|店主)(さん)?(は|が)[^。\n]{0,20}?"
+# The owner vocabulary on a colleague's journal. The English line matches exactly what
+# `_ATTRIBUTES_TO_HUMAN`'s does; it only names the word between noun and verb (`gap`)
+# so the speaker excuse can read it. The Japanese line names the particle (`case`).
+_OWNER_AS_DECIDER = _ATTRIBUTES_TO_HUMAN[:2] + [
+    re.compile(r"\b(the user|the human|the owner|ken)\b\s+(?P<gap>\w*)\s*"
+               r"(decided|asked|approved|chose|instructed|said|ruled|confirmed)", re.I),
+    re.compile(r"(ユーザー|オーナー|持ち主|店主)(さん)?(?P<case>は|が|の)[^。\n]{0,20}?"
                r"(決め|決定|指示|承認|選ん|選び|頼ん|依頼|裁定|確定)", re.I),
 ]
 
@@ -350,44 +355,61 @@ def _owner_patterns(owner: str):
     ]
 
 
+def _speaker_takes_over(text: str, m, sname: str) -> bool:
+    """Whether the owner word `m` found in `text` hands the decision to the speaker.
+
+    One rule for the owner nouns and the owner's name (life-meta#1423). The speaker's
+    name somewhere in the match does not excuse it: "ユーザーは耀一が出した案を承認した"
+    and "ミナは耀一が出した案を承認した" credit the owner -- 耀一が sits in a clause
+    modifying the noun. Only two shapes do:
+    - Japanese: the owner word is not the subject (its particle is の, never は/が) and
+      the speaker takes the subject before the verb ("ミナの話を聞いて耀一が決めた").
+      Searched in `text` from the particle to the end of the match -- the match's own
+      offsets, so a slug or title before the sentence changes nothing.
+    - English: the one word between the owner noun and the verb is the speaker's name,
+      as a whole word ("the user Yoichi asked"). "the user approved the plan Yoichi
+      submitted" has no such word and is refused."""
+    name = _name_as_word(sname)
+    if name is None:
+        return False
+    g = m.groupdict()
+    if g.get("case") == "の":
+        span = unicodedata.normalize("NFKC", text[m.end("case"):m.end()])
+        return bool(re.search(name.pattern + r"(さん)?(は|が)", span, re.I))
+    if g.get("gap"):
+        return bool(name.fullmatch(unicodedata.normalize("NFKC", g["gap"])))
+    return False
+
+
 def owner_attributions(surface: str, speaker: str | None, owners=()) -> list[str]:
     """Excerpts where the text credits the store OWNER with a decision while every
     [USER] word behind it is `speaker`'s. Empty when `speaker` is unset.
 
-    A match whose own words name the speaker ("the user Yoichi decided") credits the
-    speaker, not the owner, and passes: the owner vocabulary is a role word there. The
-    name counts only as a word -- speaker "Ed" does not excuse "The human decided", and
-    "耀一" does not excuse "耀一郎が決めた"."""
+    The owner is the owner nouns ("the human", "ユーザー") and each name of `owners`
+    (`[stores.<n>] owner`, life-meta#1423). A match passes only when the speaker takes
+    the decision inside it (`_speaker_takes_over`). The name counts only as a word --
+    speaker "Ed" does not excuse "The human decided", and "耀一" does not excuse
+    "耀一郎が決めた". English joiners never match a named owner: "Yoichi asked Ken and
+    decided" (the joiner rule above). An owner who shares the speaker's name is not
+    judged at all: every match would be the speaker's own."""
     if not speaker:
         return []
     sname = _speaker_name(speaker)
-    name = _name_as_word(sname)
     out = []
     for p in _OWNER_AS_DECIDER:
         for m in p.finditer(surface):
-            if name and name.search(unicodedata.normalize("NFKC", m.group(0))):
+            if _speaker_takes_over(surface, m, sname):
                 continue
             out.append(m.group(0)[:40])
-    # The owner by the name `[stores.<n>] owner` gives (life-meta#1423). The speaker's
-    # name inside the match does not excuse it ("ケンが耀一の案を承認した" credits the
-    # owner) -- unless the owner is not the subject at all (only "ケンの", never "ケン
-    # は/が") and the speaker then takes the subject before the verb ("ケンの話を聞いて
-    # 耀一が決めた"). "ケンは耀一が出した案を承認した" stays refused: ケン is the
-    # subject, 耀一が sits inside a clause modifying the noun. English has no excuse:
-    # "Yoichi asked Ken and decided" never matches (the joiner rule above). An owner who
-    # shares the speaker's name is not judged at all: every match would be the
-    # speaker's own.
-    taken_over = (re.compile(name.pattern + r"(さん)?(は|が)", re.I) if name else None)
     key = unicodedata.normalize("NFKC", sname).casefold()
     seen = set(out)
+    normed = unicodedata.normalize("NFKC", surface)
     for o in owners or ():
         if unicodedata.normalize("NFKC", o).casefold() == key:
             continue
         for p in _owner_patterns(o):
-            for m in p.finditer(unicodedata.normalize("NFKC", surface)):
-                case = m.groupdict().get("case")
-                if (case == "の" and taken_over
-                        and taken_over.search(m.group(0), m.end("case"))):
+            for m in p.finditer(normed):
+                if _speaker_takes_over(normed, m, sname):
                     continue
                 ex = m.group(0)[:40]
                 if ex not in seen:

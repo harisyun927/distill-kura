@@ -223,8 +223,10 @@ def test_a_name_inside_another_word_does_not_excuse_the_owner():
 def test_a_japanese_name_counts_only_as_itself():
     assert final_surface_violations("耀一が保管先を決めた", EV, ["USER"],
                                     speaker="耀一（Web）") == []
+    # ユーザー is the subject (は): the speaker's name later in the sentence no longer
+    # excuses it (life-meta#1423 -- one rule with the owner's name).
     assert final_surface_violations("ユーザーは耀一と保管先を決めた", EV, ["USER"],
-                                    speaker="耀一（Web）") == []
+                                    speaker="耀一（Web）")
     assert final_surface_violations("ユーザーは耀一郎と保管先を決めた", EV, ["USER"],
                                     speaker="耀一（Web）")
     assert final_surface_violations("オーナーはアキラと保管先を決めた", EV, ["USER"],
