@@ -268,14 +268,51 @@ def invented_quotations(surface: str, evidence: list[dict]) -> list[str]:
     return bad
 
 
+# A journal with a `speaker` holds someone else's [USER] words (life-meta#1416). Its
+# evidence can never back "the owner decided": the owner said nothing in it. The same
+# owner vocabulary the floor already knows (_ATTRIBUTES_TO_HUMAN), plus the generic
+# Japanese owner nouns, which only this floor reads -- it runs only for such a journal,
+# so the owner's own journals keep exactly the floor they had.
+_OWNER_AS_DECIDER = _ATTRIBUTES_TO_HUMAN + [
+    re.compile(r"(ユーザー|オーナー|持ち主|店主)(さん)?(は|が)[^。\n]{0,20}?"
+               r"(決め|決定|指示|承認|選ん|選び|頼ん|依頼|裁定|確定)", re.I),
+]
+
+
+def _speaker_name(speaker: str) -> str:
+    """"Yoichi (web marketing)" -> "Yoichi": the name a sentence would use."""
+    return re.split(r"[(（]", speaker, 1)[0].strip()
+
+
+def owner_attributions(surface: str, speaker: str | None) -> list[str]:
+    """Excerpts where the text credits the store OWNER with a decision while every
+    [USER] word behind it is `speaker`'s. Empty when `speaker` is unset.
+
+    A match whose own words name the speaker ("the user Yoichi decided") credits the
+    speaker, not the owner, and passes: the owner vocabulary is a role word there."""
+    if not speaker:
+        return []
+    name = _speaker_name(speaker).lower()
+    out = []
+    for p in _OWNER_AS_DECIDER:
+        for m in p.finditer(surface):
+            if name and name in m.group(0).lower():
+                continue
+            out.append(m.group(0)[:40])
+    return out
+
+
 def final_surface_violations(surface: str, evidence: list[dict], classes: list[str],
-                             allowed: str = "", known_slugs=None) -> list[str]:
+                             allowed: str = "", known_slugs=None,
+                             speaker: str | None = None) -> list[str]:
     """The one door every model-written surface must pass before it earns a mark.
 
     `surface` is everything that will be stored or indexed: title, description,
     section heading, body, curation sentences — concatenation is fine, this is a
     floor, not a parser. `allowed` is text whose numbers CODE put there (an
-    extension heading's mechanically stamped date). Returns human-readable
+    extension heading's mechanically stamped date). `speaker` is the journal's, from
+    code (config or verified manifest), never the model: set, the [USER] quotes are
+    that person's and crediting the owner is refused too. Returns human-readable
     violations; empty means pass.
     """
     v = [f"invented number: {t}" for t in composed_number_violations(surface, evidence, allowed)]
@@ -286,6 +323,8 @@ def final_surface_violations(surface: str, evidence: list[dict], classes: list[s
         v.append("unknown links: " + ", ".join(dead))
     for q in invented_quotations(surface, evidence):
         v.append(f"invented quotation: {q[:24]}…")
+    for a in owner_attributions(surface, speaker):
+        v.append(f"owner-attribution: {a}")
     return v
 
 

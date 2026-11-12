@@ -7,7 +7,10 @@
   The brain and scribe prompts get one paragraph for such a journal; the evidence
   manifest and a new memory's frontmatter record it. Journal tables are now checked at
   load (unknown keys, `path` for `root`, unknown format). Plain path entries are
-  unchanged. (life-meta#1416) — unreleased
+  unchanged. For such a journal the final-surface floor (scribe, EXTENDS, a judge's
+  FIX) also refuses crediting the owner with a decision (`owner-attribution:`), and a
+  file's speaker follows the same root-and-glob selection as discovery.
+  (life-meta#1416) — unreleased
 - distill/store: `superseded` may now be proven ONLY by an exact, whole-line match of
   the one closed template `distill/retire_lane.py` already carried (`<old-slug> は
   [reason ending 役目終わり。] (退役して|やめて)、<new-slug> (に置き換える|に統合する)`),

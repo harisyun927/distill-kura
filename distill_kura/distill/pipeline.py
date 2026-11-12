@@ -711,7 +711,8 @@ class Distiller:
                 topology.add(cont_target)
             # `allowed=cont`: digits in the target's slug are code's, like a heading date.
             bad = final_surface_violations(surface, c["evidence"], c["classes"],
-                                           allowed=cont, known_slugs=topology)
+                                           allowed=cont, known_slugs=topology,
+                                           speaker=speaker)
             if observations is not None:
                 observations.append({"attempt": attempt, "shape": False,
                                      "surface": surface, "raw": out,
@@ -725,6 +726,9 @@ class Distiller:
                      f"{'; '.join(bad)}. A number must come from the evidence itself "
                      "(do not compute new ones); never credit the human without their "
                      "own quoted words.\n")
+            if speaker and any(b.startswith("owner-attribution:") for b in bad):
+                user += (f"The [USER] words are {speaker}'s: say {speaker} asked or "
+                         "decided, never the store owner.\n")
         _, plain = _split_draft(body.group(1))
         if cont:
             plain = cont + "\n\n" + plain
@@ -843,7 +847,7 @@ class Distiller:
         topology.add(target)
         bad = final_surface_violations("\n".join([head, plain, " ".join(s_ann.values()), cand_ann]),
                                        c["evidence"], c["classes"], allowed=date,
-                                       known_slugs=topology)
+                                       known_slugs=topology, speaker=speaker)
         if observations is not None:
             observations.append({"attempt": 1, "shape": False,
                                  "surface": "\n".join([head, plain, " ".join(s_ann.values()),
@@ -1228,7 +1232,12 @@ class Distiller:
         # HTTP error). Judging on "" would read "the model was down" as "the scribe
         # did not keep the shape" — a TOSS that DELETES a gate-passed draft. No
         # answer is not a verdict.
-        out = self.scribe(prompts.POUR_SYS,
+        # Whose words, from the verified manifest (life-meta#1416): a judge that does
+        # not know could "fix" Yoichi's request back into the owner's decision. The
+        # FIX is floored for that below; this only helps it pass honestly.
+        speaker = self._manifest_speaker(raw)
+        out = self.scribe(prompts.POUR_SYS + prompts.speaker_note(speaker, braced=True),
+                          prompts.speaker_line(speaker) +
                           f"=== DRAFT: {slug} ===\n{body}\n\n"
                           f"=== EVIDENCE AND FLAGS (set by the distiller) ===\n{head}", 1600)
         if not (out or "").strip():
@@ -1251,6 +1260,14 @@ class Distiller:
                 "why": (why or "the scribe did not keep the shape")[:160],
                 "new_body": m.group(1).strip() if m else None,
                 "belongs_because": bb.group(1).strip() if bb else None}
+
+    def _manifest_speaker(self, draft_raw: str) -> str | None:
+        """The `speaker` its verified manifest records, or None (the owner's own, or
+        no readable manifest -- which the FIX path refuses on its own)."""
+        m = re.search(r"evidence_manifest:\s*sha256:([0-9a-f]{64})", draft_raw)
+        man = self.store.load_manifest_verified(m.group(1)) if m else None
+        sp = (man or {}).get("speaker")
+        return sp.strip() if isinstance(sp, str) and sp.strip() else None
 
     def _manifest_evidence(self, draft_raw: str) -> tuple[list[dict] | None, list[str]]:
         """The draft's FULL evidence, from its content-addressed manifest.
@@ -1365,7 +1382,8 @@ class Distiller:
                     if ev is None:
                         _log(f"  ⚠ fix refused {j['slug']} — no readable evidence manifest")
                         continue
-                    bad = final_surface_violations(f"{j['slug']}\n{body}", ev, classes)
+                    bad = final_surface_violations(f"{j['slug']}\n{body}", ev, classes,
+                                                   speaker=self._manifest_speaker(raw))
                     if bad:
                         _log(f"  ⚠ fix refused {j['slug']} — {'; '.join(bad)[:90]}")
                         continue

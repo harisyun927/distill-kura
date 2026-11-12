@@ -181,3 +181,125 @@ def test_the_owners_journal_adds_nothing_to_manifest_or_memory(tmp_path):
     assert "speaker" not in _manifest_of(d, slug)
     assert d.pour(slug)["ok"]
     assert "speaker" not in d.store.frontmatter_exact(slug)
+
+
+# ── the floor: the owner said nothing in a colleague's journal (Codex P1) ──
+
+from distill_kura.distill.gate import final_surface_violations   # noqa: E402
+
+EV = [{"class": "USER", "text": "put the archive on the slow disk"},
+      {"class": "TOOL", "text": "/data 3.2T used 1.1T avail"}]
+BAD = "The human decided to put the archive on the slow disk."
+
+
+def test_crediting_the_owner_on_a_colleagues_words_is_refused():
+    v = final_surface_violations(BAD, EV, ["USER", "TOOL"], speaker=SPEAKER)
+    assert v == ["owner-attribution: The human decided"], v
+    assert final_surface_violations("ユーザーが保管先を決めた", EV, ["USER"],
+                                    speaker=SPEAKER)
+    assert final_surface_violations("ケンが決めた", EV, ["USER"], speaker=SPEAKER)
+
+
+@pytest.mark.parametrize("text", [
+    "Yoichi decided to put the archive on the slow disk.",
+    "the user Yoichi asked to put the archive on the slow disk.",
+    "Yoichi (web marketing) asked for the slow disk; the archive goes there.",
+    "The archive goes on the slow disk.",
+])
+def test_the_speakers_own_name_is_not_an_owner_attribution(text):
+    assert final_surface_violations(text, EV, ["USER", "TOOL"], speaker=SPEAKER) == []
+
+
+def test_without_a_speaker_the_floor_is_what_it_was():
+    # [USER] present: crediting the human is backed, exactly as before.
+    assert final_surface_violations(BAD, EV, ["USER", "TOOL"]) == []
+    assert final_surface_violations(BAD, EV, ["USER", "TOOL"], speaker=None) == []
+    assert (final_surface_violations("the user decided on 9 disks", EV, ["TOOL"],
+                                     speaker=SPEAKER)
+            == ["invented number: 9", "credits the human with no [USER] quote",
+                "owner-attribution: the user decided"])
+
+
+BAD_SCRIBE = ("SLUG: archive-on-slow-disk\nTITLE: Archive on the slow disk\n"
+              "DESC: the archive lives on the slow disk\n"
+              f"BODY:\n{BAD}\n")
+
+
+def test_the_scribe_cannot_write_the_colleagues_words_as_the_owners(tmp_path):
+    d = tp.distiller(tmp_path, lambda user, n: tp.CANDIDATE, scribe=BAD_SCRIBE)
+    d.journals = {"yoichi": {"kind": "claude", "root": str(tmp_path / "journals"),
+                             "speaker": SPEAKER}}
+    s = d.models.scribe
+    d.models.scribe = Recorder(url=s.url, model=s.model, name="scribe", other=s.other)
+    r = d.run(chunks=1)
+    assert not r.get("drafts"), r                  # dropped after the one retry
+    retry = d.models.scribe.calls[1][1]
+    assert "owner-attribution: The human decided" in retry
+    assert f"The [USER] words are {SPEAKER}'s" in retry
+
+
+def test_the_owners_journal_still_takes_the_same_draft(tmp_path):
+    d = tp.distiller(tmp_path, lambda user, n: tp.CANDIDATE, scribe=BAD_SCRIBE)
+    assert d.run(chunks=1)["drafts"]
+
+
+POUR_KEY = "You draw the last line"
+
+
+def _judged(tmp_path, fix_body):
+    fix = f"FIX\nreason: tighter\nBODY:\n{fix_body}\n"
+    d = tp.distiller(tmp_path, lambda user, n: tp.CANDIDATE,
+                     scribe={POUR_KEY: fix, "": tp.SCRIBE})
+    d.journals = {"yoichi": {"kind": "claude", "root": str(tmp_path / "journals"),
+                             "speaker": SPEAKER}}
+    s = d.models.scribe
+    d.models.scribe = Recorder(url=s.url, model=s.model, name="scribe", other=s.other)
+    slug = d.run(chunks=1)["drafts"][0]
+    return d, slug, d.drain()
+
+
+def test_a_fix_cannot_turn_the_colleagues_words_into_the_owners(tmp_path):
+    d, slug, out = _judged(tmp_path, BAD)
+    assert out["fixed"] == 0 and out["poured"] == 0, out
+    assert os.path.exists(os.path.join(d.drafts_dir, f"{slug}.md"))   # left staged
+    judge = [c for c in d.models.scribe.calls if POUR_KEY in c[0]][0]
+    assert f"spoken by {SPEAKER}" in judge[0]
+    assert judge[1].startswith(prompts.speaker_line(SPEAKER))
+
+
+def test_a_fix_that_keeps_the_speaker_is_poured(tmp_path):
+    d, slug, out = _judged(tmp_path, "Yoichi asked to put the archive on the slow disk.")
+    assert out["fixed"] == 1 and out["poured"] == 1, out
+    assert d.store.frontmatter_exact(slug).get("speaker") == SPEAKER
+
+
+def test_the_owners_judge_prompt_is_unchanged(tmp_path):
+    d = tp.distiller(tmp_path, lambda user, n: tp.CANDIDATE,
+                     scribe={POUR_KEY: "POUR\nreason: fine\n", "": tp.SCRIBE})
+    s = d.models.scribe
+    d.models.scribe = Recorder(url=s.url, model=s.model, name="scribe", other=s.other)
+    slug = d.run(chunks=1)["drafts"][0]
+    assert d.drain()["poured"] == 1
+    judge = [c for c in d.models.scribe.calls if POUR_KEY in c[0]][0]
+    assert judge[0] == d._sys(prompts.POUR_SYS.format(language=d.language))
+    assert judge[1].startswith(f"=== DRAFT: {slug} ===")
+
+
+# ── one root split by globs (Codex P2) ───────────────────────────────────
+
+def test_the_speaker_follows_the_globs_not_just_the_root(tmp_path):
+    r = tmp_path / "sessions"
+    tp.journal(str(r / "own" / "a.jsonl"), tp.LINES)
+    tp.journal(str(r / "other" / "b.jsonl"), tp.LINES)
+    a, b = str(r / "own" / "a.jsonl"), str(r / "other" / "b.jsonl")
+    roots = {"claude": {"root": str(r), "include_glob": ["own/**"]},
+             "yoichi": {"kind": "claude", "root": str(r), "include_glob": ["other/**"],
+                        "speaker": SPEAKER}}
+    assert sorted(os.path.basename(f) for f in discover_all(roots)) == ["a.jsonl", "b.jsonl"]
+    assert speaker_for(roots, b) == SPEAKER
+    assert speaker_for(roots, a) is None
+    # the exclude side of the same selection
+    roots["yoichi"] = {"kind": "claude", "root": str(r), "exclude_glob": ["own/**"],
+                       "speaker": SPEAKER}
+    assert speaker_for(roots, b) == SPEAKER
+    assert speaker_for(roots, a) is None

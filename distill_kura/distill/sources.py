@@ -1121,12 +1121,34 @@ def speaker_for(roots: dict, path: str) -> str | None:
     shelved batch or candidate (which keeps its path) gets the same answer on retry."""
     if not path:
         return None
+    # The table must SELECT the file the way discovery does -- root and globs -- not
+    # merely hold it: one root split by globs between the owner (`own/**`) and a
+    # colleague (`other/**`) is what globs are for, and the root alone would give the
+    # owner's files the colleague's name.
     for spec in (roots or {}).values():
         if isinstance(spec, dict) and str(spec.get("speaker") or "").strip():
             root = os.path.expanduser(str(spec.get("root", "")))
-            if root and contained(root, path):
+            if root and contained(root, path) and _select(
+                    root, spec.get("include_glob") or [],
+                    spec.get("exclude_glob") or [], [path]):
                 return str(spec["speaker"]).strip()
     return None
+
+
+def _select(root: str, include: list[str], exclude: list[str],
+            found: list[str]) -> list[str]:
+    """`found` narrowed by a journal table's globs -- discovery's rule, shared with
+    `speaker_for` so the two can never disagree about which table holds a file."""
+    if include:
+        keep: list[str] = []
+        for pat in include:
+            keep += glob.glob(os.path.join(root, pat), recursive=True)
+        keep_set = set(keep)
+        found = [f for f in found if f in keep_set]
+    for pat in exclude:
+        dropped = set(glob.glob(os.path.join(root, pat), recursive=True))
+        found = [f for f in found if f not in dropped]
+    return found
 
 
 def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[str]:
@@ -1142,7 +1164,8 @@ def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[st
                     "speaker": "Yoichi (web marketing)"}}
 
     A table's `kind` names the format when its key is a label (default: the key).
-    `speaker` does not change what is found; `speaker_for` reads it.
+    `speaker` does not change what is found; `speaker_for` reads it, through the
+    same root-and-glob selection.
 
     Per-source globs exist because one sessions directory usually holds every mode's
     conversations. Pointing two stores at it distils all of them into both: the memory
@@ -1168,16 +1191,7 @@ def discover_all(roots: dict, exclude_roots: list[str] | None = None) -> list[st
             root, include, exclude = os.path.expanduser(str(spec)), [], []
         if not root or not os.path.isdir(root):
             continue
-        found = src.discover(root)
-        if include:
-            keep: list[str] = []
-            for pat in include:
-                keep += glob.glob(os.path.join(root, pat), recursive=True)
-            found = [f for f in found if f in set(keep)]
-        for pat in exclude:
-            dropped = set(glob.glob(os.path.join(root, pat), recursive=True))
-            found = [f for f in found if f not in dropped]
-        files += found
+        files += _select(root, include, exclude, src.discover(root))
     for root in (exclude_roots or []):
         files = [f for f in files if not contained(root, f)]
     # Path exclusion is not enough: a HARDLINK to a memory, sitting in an otherwise clean
