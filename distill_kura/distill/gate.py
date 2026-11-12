@@ -284,19 +284,50 @@ def _speaker_name(speaker: str) -> str:
     return re.split(r"[(（]", speaker, 1)[0].strip()
 
 
+_LATIN = r"A-Za-z0-9_\u00C0-\u024F"
+_KANJI = r"\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆"
+_KATA = r"\u30A0-\u30FF\u31F0-\u31FF\uFF66-\uFF9F"
+
+
+def _edge_forbids(ch: str) -> str:
+    """Characters that may not touch a name on the side whose edge is `ch`.
+
+    Latin letters and digits never may (English `\\b`: "Ed" is not in "decided").
+    Beside a kanji edge no kanji, beside a katakana edge no katakana: "耀一" is not in
+    "耀一郎". Hiragana may always touch a Japanese name -- it is the particle that
+    follows it ("耀一が") or the の before it ("ユーザーの耀一")."""
+    cls = _LATIN
+    if re.match(f"[{_KANJI}]", ch):
+        cls += _KANJI
+    elif re.match(f"[{_KATA}]", ch):
+        cls += _KATA
+    return cls
+
+
+def _name_as_word(name: str):
+    """`name` as a whole word, case ignored (only Latin has case), or None."""
+    name = unicodedata.normalize("NFKC", name)
+    if not name:
+        return None
+    return re.compile(f"(?<![{_edge_forbids(name[0])}]){re.escape(name)}"
+                      f"(?![{_edge_forbids(name[-1])}])", re.I)
+
+
 def owner_attributions(surface: str, speaker: str | None) -> list[str]:
     """Excerpts where the text credits the store OWNER with a decision while every
     [USER] word behind it is `speaker`'s. Empty when `speaker` is unset.
 
     A match whose own words name the speaker ("the user Yoichi decided") credits the
-    speaker, not the owner, and passes: the owner vocabulary is a role word there."""
+    speaker, not the owner, and passes: the owner vocabulary is a role word there. The
+    name counts only as a word -- speaker "Ed" does not excuse "The human decided", and
+    "耀一" does not excuse "耀一郎が決めた"."""
     if not speaker:
         return []
-    name = _speaker_name(speaker).lower()
+    name = _name_as_word(_speaker_name(speaker))
     out = []
     for p in _OWNER_AS_DECIDER:
         for m in p.finditer(surface):
-            if name and name in m.group(0).lower():
+            if name and name.search(unicodedata.normalize("NFKC", m.group(0))):
                 continue
             out.append(m.group(0)[:40])
     return out

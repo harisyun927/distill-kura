@@ -143,6 +143,11 @@ class Source:
     def discover(self, root: str) -> list[str]:
         raise NotImplementedError
 
+    def finds(self, path: str) -> bool:
+        """Would `discover` return `path` from a root that holds it? The same test,
+        one file at a time, so `speaker_for` agrees with discovery about formats."""
+        return self.matches(path)
+
     def sip(self, path: str, start: int, limit_chars: int,
             report: IntakeReport | None = None) -> tuple[list[Segment], int]:
         """Read past the watermark. Returns (segments, new watermark).
@@ -360,6 +365,9 @@ class DshSource(Source):
     def discover(self, root: str) -> list[str]:
         return sorted(glob.glob(os.path.join(root, "**", "session.jsonl.zstd"), recursive=True),
                       key=os.path.getmtime, reverse=True)
+
+    def finds(self, path: str) -> bool:
+        return os.path.basename(path) == "session.jsonl.zstd"
 
     @staticmethod
     def _lines(path: str):
@@ -1124,9 +1132,14 @@ def speaker_for(roots: dict, path: str) -> str | None:
     # The table must SELECT the file the way discovery does -- root and globs -- not
     # merely hold it: one root split by globs between the owner (`own/**`) and a
     # colleague (`other/**`) is what globs are for, and the root alone would give the
-    # owner's files the colleague's name.
-    for spec in (roots or {}).values():
+    # owner's files the colleague's name. And the table's own adapter must find the
+    # file: `claude = "/j"` beside `aki = { kind = "text", root = "/j", speaker = .. }`
+    # leaves every .jsonl there the owner's -- the text adapter never reads them.
+    for key, spec in (roots or {}).items():
         if isinstance(spec, dict) and str(spec.get("speaker") or "").strip():
+            src = SOURCES.get(spec.get("kind", key))
+            if not src or not src.finds(path):
+                continue
             root = os.path.expanduser(str(spec.get("root", "")))
             if root and contained(root, path) and _select(
                     root, spec.get("include_glob") or [],

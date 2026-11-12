@@ -210,6 +210,27 @@ def test_the_speakers_own_name_is_not_an_owner_attribution(text):
     assert final_surface_violations(text, EV, ["USER", "TOOL"], speaker=SPEAKER) == []
 
 
+def test_a_name_inside_another_word_does_not_excuse_the_owner():
+    # Codex P1: speaker "Ed" sits inside "decided".
+    assert final_surface_violations(BAD, EV, ["USER", "TOOL"], speaker="Ed") == [
+        "owner-attribution: The human decided"]
+    assert final_surface_violations("the user Ed asked to put the archive on the slow disk.",
+                                    EV, ["USER", "TOOL"], speaker="Ed (ops)") == []
+    assert final_surface_violations("the user ED asked for the slow disk.",
+                                    EV, ["USER", "TOOL"], speaker="Ed") == []
+
+
+def test_a_japanese_name_counts_only_as_itself():
+    assert final_surface_violations("耀一が保管先を決めた", EV, ["USER"],
+                                    speaker="耀一（Web）") == []
+    assert final_surface_violations("ユーザーは耀一と保管先を決めた", EV, ["USER"],
+                                    speaker="耀一（Web）") == []
+    assert final_surface_violations("ユーザーは耀一郎と保管先を決めた", EV, ["USER"],
+                                    speaker="耀一（Web）")
+    assert final_surface_violations("オーナーはアキラと保管先を決めた", EV, ["USER"],
+                                    speaker="アキ")
+
+
 def test_without_a_speaker_the_floor_is_what_it_was():
     # [USER] present: crediting the human is backed, exactly as before.
     assert final_surface_violations(BAD, EV, ["USER", "TOOL"]) == []
@@ -303,3 +324,18 @@ def test_the_speaker_follows_the_globs_not_just_the_root(tmp_path):
                        "speaker": SPEAKER}
     assert speaker_for(roots, b) == SPEAKER
     assert speaker_for(roots, a) is None
+
+
+def test_the_speaker_follows_the_adapter_too(tmp_path):
+    # Codex P2: one directory, two formats -- the text adapter never reads own.jsonl.
+    r = tmp_path / "journals"
+    tp.journal(str(r / "own.jsonl"), tp.LINES)
+    (r / "note.md").write_text("put the archive on the slow disk\n", encoding="utf-8")
+    roots = {"claude": str(r),
+             "colleague": {"kind": "text", "root": str(r), "speaker": "Aki"}}
+    assert sorted(os.path.basename(f) for f in discover_all(roots)) == ["note.md", "own.jsonl"]
+    assert speaker_for(roots, str(r / "own.jsonl")) is None
+    assert speaker_for(roots, str(r / "note.md")) == "Aki"
+    # a key that names a kind no adapter has gives nobody a speaker
+    assert speaker_for({"x": {"kind": "nope", "root": str(r), "speaker": "Aki"}},
+                       str(r / "note.md")) is None

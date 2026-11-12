@@ -477,6 +477,8 @@ colleague = { kind = "claude", root = "~/journals/eq-colleague", speaker = "Aki 
 - A file belongs to the table that SELECTS it, root and globs alike, exactly as
   discovery picks it: one sessions directory split by `include_glob` between the owner
   (`own/**`) and a colleague (`other/**`) gives only the colleague's files a speaker.
+  The table's own `kind` must also read the file: `claude = "/j"` beside a
+  `{ kind = "text", root = "/j", speaker = .. }` leaves the `.jsonl` files the owner's.
 - For a file under that root, the brain (SPOT and the coverage pass) and the scribe
   (new memories and EXTENDS) get one more paragraph after their task: the `[USER]` lines
   are the speaker's words, not the owner's decisions, and a memory says whose they are.
@@ -490,7 +492,8 @@ colleague = { kind = "claude", root = "~/journals/eq-colleague", speaker = "Aki 
   store owner with a decision ("the human decided", "the owner approved", "ユーザーが決めた"
   and the floor's own owner words): the owner said nothing in that journal. A sentence
   whose matched words name the speaker ("the user Yoichi asked") is the speaker's and
-  passes. The scribe gets one retry with the violation named, as with every floor.
+  passes. The name counts only as a whole word: speaker `Ed` does not excuse "decided",
+  `耀一` does not excuse `耀一郎` (Latin ignores case; hiragana may touch a Japanese name). The scribe gets one retry with the violation named, as with every floor.
 - A journal without `speaker` is read exactly as before: same prompts, same manifest
   bytes, same floor. The other floors are unchanged — the speaker's words are still
   `[USER]` evidence for everything else.
