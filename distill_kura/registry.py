@@ -77,10 +77,10 @@ _STORE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}[a-z0-9]$")
 # Keys a [stores.<name>] table may carry. Anything else is a typo until proven
 # otherwise; extensions use an `x_` prefix so they are visibly not ours.
 STORE_KEYS = {"path", "label", "readonly", "write_policy", "persona", "charter",
-              "model_profile"}
+              "model_profile", "owner"}
 NESTED_KEYS = {"distill", "prefill", "fastpath", "warm"}
 _TYPES = {"path": str, "label": str, "readonly": bool, "write_policy": str,
-          "persona": str, "charter": str, "model_profile": str,
+          "persona": str, "charter": str, "model_profile": str, "owner": (str, list),
           "distill": dict, "prefill": dict, "fastpath": dict, "warm": dict}
 # The nested tables need checking too: `inherit_global_journals = "false"` is a STRING,
 # therefore truthy, so a store inherited the global intake it had explicitly declined.
@@ -141,6 +141,27 @@ def _check_journals(section: str, journals: dict) -> None:
             if any(ch in sp for ch in "\r\n\t") or len(sp) > SPEAKER_MAX:
                 raise ValueError(f"[{where}] speaker must be one line of at most "
                                  f"{SPEAKER_MAX} characters, got {sp!r}")
+
+
+def _check_owner(name: str, owner) -> None:
+    """`owner` names the store's owner as a memory would write them (life-meta#1423):
+    one string or a list of them. Each is pasted into a prompt and becomes a word the
+    speaker floor refuses as a decider, so each must be one non-empty line of at most
+    SPEAKER_MAX characters. An empty list would look set and say nothing."""
+    if owner is None:
+        return
+    names = [owner] if isinstance(owner, str) else owner
+    if not names:
+        raise ValueError(f"[stores.{name}] owner is an empty list; leave it out instead")
+    for o in names:
+        if not isinstance(o, str):
+            raise ValueError(f"[stores.{name}] owner must be a string or a list of "
+                             f"strings, got {o!r}")
+        if not o.strip() or not re.split(r"[(（]", o, 1)[0].strip():
+            raise ValueError(f"[stores.{name}] owner {o!r} is empty")
+        if any(ch in o for ch in "\r\n\t") or len(o) > SPEAKER_MAX:
+            raise ValueError(f"[stores.{name}] owner must be one line of at most "
+                             f"{SPEAKER_MAX} characters, got {o!r}")
 
 
 # `append` writes an EXTENDS into the existing memory (the original behaviour);
@@ -313,6 +334,7 @@ def _check_table(where: str, table: dict, types: dict) -> None:
 
 def _check_types(name: str, sc: dict) -> None:
     _check_table(f"stores.{name}", sc, _TYPES)
+    _check_owner(name, sc.get("owner"))
     _check_distill(f"stores.{name}.distill", sc.get("distill") or {})
     _check_prefill(f"stores.{name}.prefill", sc.get("prefill") or {})
     _check_unknown(f"stores.{name}.fastpath", sc.get("fastpath") or {}, _FASTPATH_TYPES)

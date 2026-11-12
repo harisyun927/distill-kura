@@ -344,19 +344,22 @@ SPEAKER_NOTE = """
 
 [Whose words the [USER] lines are]
 In this material every [USER] line is spoken by {speaker} -- NOT by the person this
-store's charter calls the human. They are not that person's decisions, rulings or
+store's charter calls the human{owner}. They are not that person's decisions, rulings or
 instructions. Read them as {speaker}'s own words: what {speaker} asked, reported or
 decided within their own work. When a memory rests on them, the memory says so in
 its own language (for example "{speaker}の言葉:" / "according to {speaker}") and
 never turns them into the owner's decision."""
 
 
-def speaker_note(speaker: str | None, *, braced: bool = False) -> str:
+def speaker_note(speaker: str | None, *, braced: bool = False, owners=()) -> str:
     """The paragraph for `speaker`, or "" for the owner's own journal. `braced` doubles
-    the braces for a task that is `.format()`ed afterwards (the scribe's)."""
+    the braces for a task that is `.format()`ed afterwards (the scribe's). `owners`
+    (`[stores.<n>] owner`, life-meta#1423) names the human in brackets; without it the
+    paragraph is byte-for-byte what it was."""
     if not speaker:
         return ""
-    note = SPEAKER_NOTE.format(speaker=speaker)
+    owner = f" ({' / '.join(owners)})" if owners else ""
+    note = SPEAKER_NOTE.format(speaker=speaker, owner=owner)
     return note.replace("{", "{{").replace("}", "}}") if braced else note
 
 

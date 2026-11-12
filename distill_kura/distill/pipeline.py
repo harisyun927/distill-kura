@@ -39,7 +39,8 @@ from ..registry import EXTEND_MODES, Registry
 from ..store import ANNOTATION_KEYS, FROZEN, Store, normalize_tags
 from . import prompts, transition
 from .gate import (attributes_to_human, composed_number_violations,
-                   final_surface_violations, gate, norm, salvage, verify_tags)
+                   final_surface_violations, gate, norm, owner_names, salvage,
+                   verify_tags)
 from .pending import MAX_ATTEMPTS, PendingShelf, failure_kind
 from .seeds import Seeds
 from .sources import Segment, as_evidence, call_claim_bound, call_sip, discover_all, source_for, speaker_for, IntakeReport, SCAN_LIMIT
@@ -310,6 +311,12 @@ class Distiller:
     def _speaker(self) -> str | None:
         return self.speaker_of(getattr(self, "_current_source", "") or "")
 
+    @property
+    def owners(self) -> tuple[str, ...]:
+        """`[stores.<n>] owner` as names (life-meta#1423), () when unset. A property,
+        so the writer bench's constructor-less compose object has it too."""
+        return owner_names(getattr(self.store, "owner", None))
+
     # ── model roles (charter first, byte-identical, for the shared prefix) ──
     def _sys(self, task: str) -> str:
         return self.charter + "\n──────────\n" + task
@@ -381,7 +388,7 @@ class Distiller:
         rolled back), that stretch was gone for good. The caller shelves the batch on
         a failure instead; here we only tell the two apart."""
         limit = max_items or self.max_items
-        note = prompts.speaker_note(self._speaker())
+        note = prompts.speaker_note(self._speaker(), owners=self.owners)
         try:
             raw = self._brain_json(
                 prompts.SPOT_SYS.format(max_items=limit, language=self.language) + note,
@@ -672,7 +679,7 @@ class Distiller:
         # as the candidate's quotes did. One retry with the violations named, then drop.
         for attempt in (1, 2):
             out = scribe_call(prompts.SCRIBE_SYS
-                              + prompts.speaker_note(speaker, braced=True), user)
+                              + prompts.speaker_note(speaker, braced=True, owners=self.owners), user)
             if out is None and failures is not None:
                 # A transport fact, not a verdict: the caller keeps the candidate and
                 # its evidence for another try instead of losing it to a bad minute.
@@ -712,7 +719,7 @@ class Distiller:
             # `allowed=cont`: digits in the target's slug are code's, like a heading date.
             bad = final_surface_violations(surface, c["evidence"], c["classes"],
                                            allowed=cont, known_slugs=topology,
-                                           speaker=speaker)
+                                           speaker=speaker, owners=self.owners)
             if observations is not None:
                 observations.append({"attempt": attempt, "shape": False,
                                      "surface": surface, "raw": out,
@@ -806,7 +813,7 @@ class Distiller:
         if error_endpoint is None:
             error_endpoint = self.models.scribe
         speaker = self._speaker()
-        out = scribe_call(prompts.EXTEND_SYS + prompts.speaker_note(speaker, braced=True),
+        out = scribe_call(prompts.EXTEND_SYS + prompts.speaker_note(speaker, braced=True, owners=self.owners),
                           prompts.speaker_line(speaker) +
                           f"MEMORY TO EXTEND: {target}\nDATE: {date}\n"
                           f"The distiller's reading (not evidence): {c.get('extends_why')}\n\n"
@@ -847,7 +854,8 @@ class Distiller:
         topology.add(target)
         bad = final_surface_violations("\n".join([head, plain, " ".join(s_ann.values()), cand_ann]),
                                        c["evidence"], c["classes"], allowed=date,
-                                       known_slugs=topology, speaker=speaker)
+                                       known_slugs=topology, speaker=speaker,
+                                       owners=self.owners)
         if observations is not None:
             observations.append({"attempt": 1, "shape": False,
                                  "surface": "\n".join([head, plain, " ".join(s_ann.values()),
@@ -1236,7 +1244,7 @@ class Distiller:
         # not know could "fix" Yoichi's request back into the owner's decision. The
         # FIX is floored for that below; this only helps it pass honestly.
         speaker = self._manifest_speaker(raw)
-        out = self.scribe(prompts.POUR_SYS + prompts.speaker_note(speaker, braced=True),
+        out = self.scribe(prompts.POUR_SYS + prompts.speaker_note(speaker, braced=True, owners=self.owners),
                           prompts.speaker_line(speaker) +
                           f"=== DRAFT: {slug} ===\n{body}\n\n"
                           f"=== EVIDENCE AND FLAGS (set by the distiller) ===\n{head}", 1600)
@@ -1383,7 +1391,8 @@ class Distiller:
                         _log(f"  ⚠ fix refused {j['slug']} — no readable evidence manifest")
                         continue
                     bad = final_surface_violations(f"{j['slug']}\n{body}", ev, classes,
-                                                   speaker=self._manifest_speaker(raw))
+                                                   speaker=self._manifest_speaker(raw),
+                                                   owners=self.owners)
                     if bad:
                         _log(f"  ⚠ fix refused {j['slug']} — {'; '.join(bad)[:90]}")
                         continue

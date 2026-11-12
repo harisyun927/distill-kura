@@ -494,6 +494,11 @@ colleague = { kind = "claude", root = "~/journals/eq-colleague", speaker = "Aki 
   whose matched words name the speaker ("the user Yoichi asked") is the speaker's and
   passes. The name counts only as a whole word: speaker `Ed` does not excuse "decided",
   `耀一` does not excuse `耀一郎` (Latin ignores case; hiragana may touch a Japanese name). The scribe gets one retry with the violation named, as with every floor.
+- `[stores.<n>] owner = "Mina"` (or a list, `["ミナ", "Mina"]`; each one line, at most
+  80 characters) is what memories call the store owner. On a `speaker` journal the floor
+  then also refuses the owner by name as the decider ("ミナが決めた", "Mina decided",
+  "ミナの指示で") unless the speaker is the subject ("耀一がミナに聞いて決めた"), and the
+  speaker paragraph names the human ("calls the human (Mina)"). Unset: nothing changes.
 - A journal without `speaker` is read exactly as before: same prompts, same manifest
   bytes, same floor. The other floors are unchanged — the speaker's words are still
   `[USER]` evidence for everything else.

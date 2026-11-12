@@ -313,7 +313,41 @@ def _name_as_word(name: str):
                       f"(?![{_edge_forbids(name[-1])}])", re.I)
 
 
-def owner_attributions(surface: str, speaker: str | None) -> list[str]:
+_DECIDES_JA = r"(決め|決定|指示|承認|選ん|選び|頼ん|依頼|裁定|確定)"
+_DECIDES_EN = r"(decided|asked|approved|chose|instructed|said|ruled|confirmed)"
+# One word may sit between the name and the verb ("Ken quickly decided"), but not a
+# conjunction: in "Yoichi asked Ken and decided" the decider is Yoichi.
+_NOT_A_JOINER = r"(?!(?:and|or|but|so|to|nor)\b)"
+
+
+def owner_names(owner) -> tuple[str, ...]:
+    """`[stores.<n>] owner` as the names a sentence would use, in order, deduplicated."""
+    if not owner:
+        return ()
+    names = [owner] if isinstance(owner, str) else list(owner)
+    out = []
+    for o in names:
+        n = _speaker_name(o) if isinstance(o, str) else ""
+        if n and n not in out:
+            out.append(n)
+    return tuple(out)
+
+
+def _owner_patterns(owner: str):
+    """The owner's name, as a word, followed by a decision verb (life-meta#1423)."""
+    w = _name_as_word(owner)
+    if w is None:
+        return []
+    n = w.pattern
+    return [
+        re.compile(n + r"(さん)?(は|が|の)([^。\n]{0,20}?)" + _DECIDES_JA, re.I),
+        re.compile(n + r"(さん)?\s*[:：]", re.I),
+        re.compile(n + r"\s+(?:" + _NOT_A_JOINER + r"[\w'-]+\s+)?" + _DECIDES_EN, re.I),
+        re.compile(n + r"'s\s+(decision|instruction|approval|ruling|call)\b", re.I),
+    ]
+
+
+def owner_attributions(surface: str, speaker: str | None, owners=()) -> list[str]:
     """Excerpts where the text credits the store OWNER with a decision while every
     [USER] word behind it is `speaker`'s. Empty when `speaker` is unset.
 
@@ -323,19 +357,39 @@ def owner_attributions(surface: str, speaker: str | None) -> list[str]:
     "耀一" does not excuse "耀一郎が決めた"."""
     if not speaker:
         return []
-    name = _name_as_word(_speaker_name(speaker))
+    sname = _speaker_name(speaker)
+    name = _name_as_word(sname)
     out = []
     for p in _OWNER_AS_DECIDER:
         for m in p.finditer(surface):
             if name and name.search(unicodedata.normalize("NFKC", m.group(0))):
                 continue
             out.append(m.group(0)[:40])
+    # The owner by the name `[stores.<n>] owner` gives (life-meta#1423). Here the name
+    # is the subject, so the speaker's name inside the match does not excuse it ("ケン
+    # が耀一の案を承認した" credits the owner) -- unless the speaker takes over as the
+    # subject before the verb ("ケンの話を聞いて耀一が決めた"). An owner who shares the
+    # speaker's name is not judged at all: every match would be the speaker's own.
+    taken_over = (re.compile(name.pattern + r"(さん)?(は|が)", re.I) if name else None)
+    key = unicodedata.normalize("NFKC", sname).casefold()
+    seen = set(out)
+    for o in owners or ():
+        if unicodedata.normalize("NFKC", o).casefold() == key:
+            continue
+        for p in _owner_patterns(o):
+            for m in p.finditer(unicodedata.normalize("NFKC", surface)):
+                if taken_over and taken_over.search(m.group(0)):
+                    continue
+                ex = m.group(0)[:40]
+                if ex not in seen:
+                    seen.add(ex)
+                    out.append(ex)
     return out
 
 
 def final_surface_violations(surface: str, evidence: list[dict], classes: list[str],
                              allowed: str = "", known_slugs=None,
-                             speaker: str | None = None) -> list[str]:
+                             speaker: str | None = None, owners=()) -> list[str]:
     """The one door every model-written surface must pass before it earns a mark.
 
     `surface` is everything that will be stored or indexed: title, description,
@@ -343,7 +397,8 @@ def final_surface_violations(surface: str, evidence: list[dict], classes: list[s
     floor, not a parser. `allowed` is text whose numbers CODE put there (an
     extension heading's mechanically stamped date). `speaker` is the journal's, from
     code (config or verified manifest), never the model: set, the [USER] quotes are
-    that person's and crediting the owner is refused too. Returns human-readable
+    that person's and crediting the owner is refused too -- by the owner nouns, and
+    by name for each of `owners` (`[stores.<n>] owner`). Returns human-readable
     violations; empty means pass.
     """
     v = [f"invented number: {t}" for t in composed_number_violations(surface, evidence, allowed)]
@@ -354,7 +409,7 @@ def final_surface_violations(surface: str, evidence: list[dict], classes: list[s
         v.append("unknown links: " + ", ".join(dead))
     for q in invented_quotations(surface, evidence):
         v.append(f"invented quotation: {q[:24]}…")
-    for a in owner_attributions(surface, speaker):
+    for a in owner_attributions(surface, speaker, owners):
         v.append(f"owner-attribution: {a}")
     return v
 
