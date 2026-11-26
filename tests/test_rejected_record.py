@@ -170,3 +170,182 @@ def test_a_dry_run_distiller_gets_no_record(tmp_path):
     d.spot_checked([Segment("USER", "hello there")])
     d._record_rejected("rejected.jsonl", {"x": 1})
     assert _read(d, "bad_replies.jsonl") == [] and _read(d, "rejected.jsonl") == []
+
+
+# ── life-meta#1447 PR-B: what the max_items limit cut leaves a record ────────
+
+def _spot_of(topics):
+    q = "[USER] put the archive on the slow disk, and remember that"
+    return json.dumps([{"topic": t, "kind": "project", "why": f"why {t}", "quotes": [q]}
+                       for t in topics])
+
+
+def _run_with(tmp_path, topics, answers_extra=None, passes=None):
+    journal(str(tmp_path / "journals" / "a.jsonl"), LINES)
+    reg, store = build(tmp_path)
+    if passes:
+        reg.raw["distill"]["coverage_passes"] = passes
+    d = Distiller(reg, store)
+    answers = dict(answers_extra or {})
+    answers.update({"deserves to become a permanent memory": _spot_of(topics),
+                    "You write the final memory": SCRIBE})
+    script(d, answers)
+    d.novelty = lambda c, near: ("NEW", "", None)   # type: ignore[method-assign]
+    return d, d.run(chunks=1)
+
+
+def test_candidates_past_the_limit_are_recorded_with_topic_and_why(tmp_path):
+    topics = ["t1", "t2", "t3", "t4", "t5", "t6"]
+    d, _ = _run_with(tmp_path, topics)
+    rows = _read(d, "cut_at_limit.jsonl")
+    assert len(rows) == 1
+    assert rows[0]["limit"] == 4 and rows[0]["kept"] == 4 and rows[0]["passes"] == 1
+    assert [c["topic"] for c in rows[0]["cut"]] == ["t5", "t6"]
+    assert rows[0]["cut"][0]["why"] == "why t5" and "quotes" not in rows[0]["cut"][0]
+    m = _read(d, "metrics.jsonl")[-1]
+    assert m["cut_at_limit"] == 2 and m["spot_passes"] == 1
+
+
+def test_the_cut_record_does_not_change_the_batch(tmp_path):
+    over, over_r = _run_with(tmp_path / "over", ["t1", "t2", "t3", "t4", "t5", "t6"])
+    at, at_r = _run_with(tmp_path / "at", ["t1", "t2", "t3", "t4"])
+    for k in ("drafts", "dropped", "covered", "seeds"):
+        assert over_r.get(k) == at_r.get(k), k
+    assert _read(at, "cut_at_limit.jsonl") == []      # nothing cut, nothing recorded
+    assert _read(at, "metrics.jsonl")[-1]["cut_at_limit"] == 0
+    from distill_kura.distill.sources import Segment
+    segs = [Segment("USER", "put the archive on the slow disk, and remember that")]
+    assert [c["topic"] for c in over.spot(segs)] == ["t1", "t2", "t3", "t4"]
+
+
+def test_the_second_pass_cut_is_recorded_too(tmp_path):
+    d, _ = _run_with(tmp_path, ["t1", "t2"], passes=2,
+                     answers_extra={"WALKED PAST": _spot_of(["t2", "t3", "t4", "t5", "t6"])})
+    rows = _read(d, "cut_at_limit.jsonl")
+    assert len(rows) == 1 and rows[0]["passes"] == 2
+    assert [c["topic"] for c in rows[0]["cut"]] == ["t5", "t6"]   # t2 is a repeat, not a cut
+
+
+def test_a_dry_run_records_no_cut(tmp_path):
+    journal(str(tmp_path / "journals" / "a.jsonl"), LINES)
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store, writes=False)
+    script(d, {"deserves to become a permanent memory": _spot_of(["a", "b", "c", "d", "e"])})
+    from distill_kura.distill.sources import Segment
+    assert len(d.spot([Segment("USER", "put the archive on the slow disk")])) == 4
+    assert _read(d, "cut_at_limit.jsonl") == []
+
+
+# ── life-meta#1447 PR-B: each floor violation says where it came from ────────
+
+def _spot_with(keep):
+    c = json.loads(SPOT)
+    c[0]["keep"] = keep
+    return json.dumps(c, ensure_ascii=False)
+
+
+def _rejected_for(tmp_path, spot, scribe):
+    journal(str(tmp_path / "journals" / "a.jsonl"), LINES)
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    script(d, {"deserves to become a permanent memory": spot, "You write the final memory": scribe})
+    d.novelty = lambda c, near: ("NEW", "", None)   # type: ignore[method-assign]
+    r = d.run(chunks=1)
+    assert not r.get("drafts")                       # the verdict is the floor's, unchanged
+    rows = _read(d, "rejected.jsonl")
+    assert len(rows) == 1
+    return rows[0]
+
+
+def test_a_violation_only_in_the_brains_annotation_is_marked_brain(tmp_path):
+    row = _rejected_for(tmp_path, _spot_with("9999 GB のディスク"), SCRIBE)
+    assert row["violations"] and len(row["violation_origins"]) == len(row["violations"])
+    for o in row["violation_origins"]:
+        assert o["side"] == "brain" and o["from"] == ["brain:keep"]
+    assert [o["attempt"] for o in row["violation_origins"]] == [1, 2]
+    for a in row["attempts"]:                        # also on each attempt, beside its verdict
+        assert [o["violation"] for o in a["origins"]] == a["violations"]
+
+
+def test_a_violation_only_in_the_writers_text_is_marked_writer(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk, 9999 GB of it.")
+    row = _rejected_for(tmp_path, SPOT, bad)
+    assert {o["side"] for o in row["violation_origins"]} == {"writer"}
+    assert all(o["from"] == ["writer:body"] for o in row["violation_origins"])
+
+
+def test_the_same_violation_in_both_is_marked_both(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk, 9999 GB of it.")
+    row = _rejected_for(tmp_path, _spot_with("9999 GB のディスク"), bad)
+    o = row["violation_origins"][0]
+    assert o["side"] == "brain+writer"
+    assert set(o["from"]) == {"brain:keep", "writer:body"}
+
+
+def test_an_extension_violation_in_the_brains_annotation_is_marked_brain(tmp_path):
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    from tests.test_extend_continue import OLD
+    c = {"extends": OLD, "extends_why": "adds", "may_fade": "9999 GB の容量",
+         "evidence": [{"class": "USER", "text": "move it tonight"}],
+         "classes": ["USER"], "kind": "project"}
+    d.scribe = (lambda task, u, max_tokens=0:      # type: ignore[method-assign]
+                "SECTION: notes\nBODY:\nmove it tonight\n")
+    obs: list = []
+    assert d._compose_extension(c, observations=obs) is None
+    assert obs[0]["violations"]
+    assert [o["side"] for o in obs[0]["origins"]] == ["brain"] * len(obs[0]["violations"])
+    assert obs[0]["origins"][0]["from"] == ["brain:may_fade"]
+
+
+def test_a_passing_surface_carries_no_origins(tmp_path):
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    c = json.loads(SPOT)[0]
+    c.update({"evidence": [{"class": "USER", "text": LINES[0][1]}], "classes": ["USER"]})
+    script(d, {"You write the final memory": SCRIBE})
+    obs: list = []
+    assert d.compose(c, {"walked": []}, [], obs)["slug"] == "archive-mirror"
+    assert obs[-1]["violations"] == [] and obs[-1]["origins"] == []
+
+
+# ── the floor folds every dead link into ONE message; origin is read link by link ──
+
+def test_unknown_links_in_different_parts_are_each_attributed(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk. See [[missing-body]].")
+    row = _rejected_for(tmp_path, _spot_with("Keep [[missing-brain]]."), bad)
+    links = [o for o in row["violation_origins"] if o["violation"].startswith("unknown links")]
+    assert links
+    for o in links:
+        assert "missing-body" in o["violation"] and "missing-brain" in o["violation"]
+        assert set(o["from"]) == {"writer:body", "brain:keep"}
+        assert o["side"] == "brain+writer"
+    assert not [o for o in row["violation_origins"] if o["side"] == "unattributed"]
+
+
+def test_an_unknown_link_in_one_part_names_only_that_part(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk. See [[missing-body]].")
+    row = _rejected_for(tmp_path, SPOT, bad)
+    links = [o for o in row["violation_origins"] if o["violation"].startswith("unknown links")]
+    assert links and all(o["from"] == ["writer:body"] and o["side"] == "writer" for o in links)
+
+
+def test_origin_reading_does_not_change_the_verdict_or_the_record_shape(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk. See [[missing-body]].")
+    journal(str(tmp_path / "journals" / "a.jsonl"), LINES)
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    script(d, {"deserves to become a permanent memory": _spot_with("Keep [[missing-brain]]."),
+               "You write the final memory": bad})
+    d.novelty = lambda c, near: ("NEW", "", None)   # type: ignore[method-assign]
+    r = d.run(chunks=1)
+    assert not r.get("drafts") and not r.get("dropped")
+    row = _read(d, "rejected.jsonl")[0]
+    for o in row["violation_origins"]:
+        assert set(o) == {"violation", "from", "side", "attempt"}
+        assert isinstance(o["from"], list) and isinstance(o["side"], str)

@@ -227,6 +227,47 @@ def _curation_of(out: str) -> tuple[list[str], dict[str, str], str | None]:
         return [], ann, f"TAGS line unreadable, written untagged: {e}"
 
 
+def _annotation_parts(s_ann: dict, c: dict) -> dict[str, str]:
+    """The curation sentences the floor reads, by who wrote them: the scribe's own
+    lines (`writer:`) and the candidate's from the brain (`brain:`), which the scribe
+    cannot edit."""
+    return {**{f"writer:{k}": v for k, v in s_ann.items()},
+            **{f"brain:{k}": str(c.get(k) or "") for k in ANNOTATION_KEYS}}
+
+
+def _origins(bad: list[str], parts: dict[str, str], floor) -> list[dict]:
+    """Which part of the surface each violation in `bad` comes from (life-meta#1447).
+
+    Observation only. The verdict is `bad`, decided once on the whole surface; this
+    asks the SAME floor of each part alone, so the origin is read at the moment of the
+    check instead of guessed later by matching strings. `side` is `writer` (the
+    scribe's text), `brain` (the candidate's annotations), `code`, or a `+` of them;
+    `unattributed` when no part alone produces it (a quotation spanning two parts)."""
+    if not bad:
+        return []
+    per = {n: set().union(*(_atoms(x) for x in floor(t)))
+           for n, t in parts.items() if (t or "").strip()}
+    out = []
+    for v in bad:
+        want = _atoms(v)
+        src = [n for n, atoms in per.items() if want & atoms]
+        side = "+".join(sorted({n.split(":", 1)[0] for n in src})) or "unattributed"
+        out.append({"violation": v, "from": src, "side": side})
+    return out
+
+
+_LINKS_PREFIX = "unknown links: "
+
+
+def _atoms(violation: str) -> set[str]:
+    """One violation as the pieces it is made of. The floor folds every dead link of a
+    surface into ONE message (`unknown links: a, b`), so a part that holds only `b`
+    would never string-match it; compare link by link. Every other kind is one piece."""
+    if violation.startswith(_LINKS_PREFIX):
+        return {_LINKS_PREFIX + n for n in violation[len(_LINKS_PREFIX):].split(", ")}
+    return {violation}
+
+
 class Distiller:
     def __init__(self, reg: Registry, store: Store, journals: dict[str, str] | None = None,
                  language: str | None = None, scribe_slots: int = 4,
@@ -371,6 +412,10 @@ class Distiller:
         rolled back), that stretch was gone for good. The caller shelves the batch on
         a failure instead; here we only tell the two apart."""
         limit = max_items or self.max_items
+        # What the limit cut and how many passes ran, for the caller's record
+        # (life-meta#1447). Read by _process_batch only, so a bench that calls spot()
+        # writes nothing new; the candidates returned are exactly what they were.
+        self.last_spot = {"cut": [], "passes": 1}
         try:
             raw = self._brain_json(
                 prompts.SPOT_SYS.format(max_items=limit, language=self.language),
@@ -382,7 +427,9 @@ class Distiller:
             detail = err or "the brain answered nothing at all"
             return [], {"reason": failure_kind(detail) if err else "bad_reply",
                         "detail": detail}
-        found = salvage(raw)[:limit]
+        found = salvage(raw)
+        self.last_spot["cut"] = found[limit:]
+        found = found[:limit]
         if not found and not _is_empty_list(raw):
             # The failure keeps only the head (it rides the shelf); the whole reply is
             # recorded here so the shape of what the brain said can be read later.
@@ -396,6 +443,7 @@ class Distiller:
         for _ in range(max(0, self.coverage_passes - 1)):
             if len(found) >= limit:
                 break
+            self.last_spot["passes"] += 1
             already = "\n".join(f"- {c.get('topic')}: {c.get('why')}" for c in found)
             more = salvage(self._brain_json(
                 prompts.COVERAGE_SYS.format(max_items=limit - len(found),
@@ -405,7 +453,9 @@ class Distiller:
             if not more:
                 break
             seen = {c.get("topic") for c in found}
-            found += [c for c in more if c.get("topic") not in seen][:limit - len(found)]
+            fresh = [c for c in more if c.get("topic") not in seen]
+            self.last_spot["cut"] += fresh[limit - len(found):]
+            found += fresh[:limit - len(found)]
         return found, None
 
     # ── ④ novelty ────────────────────────────────────────────────────────
@@ -696,12 +746,19 @@ class Distiller:
             if cont_target:
                 topology.add(cont_target)
             # `allowed=cont`: digits in the target's slug are code's, like a heading date.
-            bad = final_surface_violations(surface, c["evidence"], c["classes"],
-                                           allowed=cont, known_slugs=topology)
+            def floor(text: str) -> list[str]:
+                return final_surface_violations(text, c["evidence"], c["classes"],
+                                                allowed=cont, known_slugs=topology)
+            bad = floor(surface)
             if observations is not None:
+                parts = {"writer:slug": slug.group(1),
+                         "writer:title": title.group(1) if title else "",
+                         "writer:desc": desc.group(1), "writer:body": body.group(1),
+                         **_annotation_parts(s_ann, c), "code:continuation": cont}
                 observations.append({"attempt": attempt, "shape": False,
                                      "surface": surface, "raw": out,
-                                     "violations": list(bad)})
+                                     "violations": list(bad),
+                                     "origins": _origins(bad, parts, floor)})
             if not bad:
                 break
             if attempt == 2:
@@ -825,14 +882,18 @@ class Distiller:
         topology = (set(known_slugs) if known_slugs is not None
                     else set(self._known_slugs(target)))
         topology.add(target)
-        bad = final_surface_violations("\n".join([head, plain, " ".join(s_ann.values()), cand_ann]),
-                                       c["evidence"], c["classes"], allowed=date,
-                                       known_slugs=topology)
+        def floor(text: str) -> list[str]:
+            return final_surface_violations(text, c["evidence"], c["classes"],
+                                            allowed=date, known_slugs=topology)
+        bad = floor("\n".join([head, plain, " ".join(s_ann.values()), cand_ann]))
         if observations is not None:
+            parts = {"writer:heading": head, "writer:body": plain,
+                     **_annotation_parts(s_ann, c)}
             observations.append({"attempt": 1, "shape": False,
                                  "surface": "\n".join([head, plain, " ".join(s_ann.values()),
                                                         cand_ann]),
-                                 "raw": out or "", "violations": list(bad)})
+                                 "raw": out or "", "violations": list(bad),
+                                 "origins": _origins(bad, parts, floor)})
         if bad:
             _log(f"      ✗ extension surface fails the floor: {bad}")
             return None
@@ -1571,6 +1632,16 @@ class Distiller:
                           "pending_detail": failure["detail"][:200]})
             return {"failure": failure}
         _log(f"  brain found {len(cands)} candidates ({time.time()-t0:.1f}s)")
+        spot = getattr(self, "last_spot", None) or {"cut": [], "passes": 1}
+        if spot["cut"]:
+            # Past max_items the brain's candidates used to vanish without a count.
+            # Observation only: nothing reads this back (life-meta#1447 PR-B).
+            _log(f"  ✂ {len(spot['cut'])} candidates past the limit of {self.max_items}")
+            self._record_rejected("cut_at_limit.jsonl", {
+                "source_key": key, "source": os.path.basename(path),
+                "limit": self.max_items, "kept": len(cands), "passes": spot["passes"],
+                "cut": [{k: x.get(k) for k in ("topic", "kind", "why")}
+                        for x in spot["cut"]]})
         kept, dropped, ideas = gate(cands, segs, self.store_text())
         for i in ideas:
             self.seeds.sow(f"{i.get('topic')} — {i.get('why')}", "brain/spot")
@@ -1670,7 +1741,9 @@ class Distiller:
                             "candidate": {k: v for k, v in c.items() if k != "evidence"},
                             "evidence": c.get("evidence"),
                             "attempts": obs,
-                            "violations": [v for o in obs for v in o.get("violations", [])]})
+                            "violations": [v for o in obs for v in o.get("violations", [])],
+                            "violation_origins": [{**x, "attempt": o.get("attempt")}
+                                                  for o in obs for x in o.get("origins", [])]})
                         continue
                     _log(f"      wrote {d['slug']} → {os.path.basename(self.stage(d, path))}")
                     made.append(d["slug"])
@@ -1689,6 +1762,7 @@ class Distiller:
             "draft_tokens_est": estimate("\n".join(draft_text)),
             "index_tokens_est": estimate(self.store.index_text()),
             "composes_pending": composes_pending,
+            "cut_at_limit": len(spot["cut"]), "spot_passes": spot["passes"],
         })
         return {"drafts": made, "dropped": killed, "covered": covered, "seeds": sown,
                 "recurred": recurred, "cue_receipts": cue_receipts,
@@ -1757,7 +1831,9 @@ class Distiller:
                     "candidate": {k: v for k, v in c.items() if k != "evidence"},
                     "evidence": c.get("evidence"),
                     "attempts": obs, "from_shelf": True,
-                    "violations": [v for o in obs for v in o.get("violations", [])]})
+                    "violations": [v for o in obs for v in o.get("violations", [])],
+                    "violation_origins": [{**x, "attempt": o.get("attempt")}
+                                          for o in obs for x in o.get("origins", [])]})
                 self.pending_compose.drop(fp)
                 continue
             self.pending_compose.save(
