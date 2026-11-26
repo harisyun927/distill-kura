@@ -227,6 +227,33 @@ def _curation_of(out: str) -> tuple[list[str], dict[str, str], str | None]:
         return [], ann, f"TAGS line unreadable, written untagged: {e}"
 
 
+def _annotation_parts(s_ann: dict, c: dict) -> dict[str, str]:
+    """The curation sentences the floor reads, by who wrote them: the scribe's own
+    lines (`writer:`) and the candidate's from the brain (`brain:`), which the scribe
+    cannot edit."""
+    return {**{f"writer:{k}": v for k, v in s_ann.items()},
+            **{f"brain:{k}": str(c.get(k) or "") for k in ANNOTATION_KEYS}}
+
+
+def _origins(bad: list[str], parts: dict[str, str], floor) -> list[dict]:
+    """Which part of the surface each violation in `bad` comes from (life-meta#1447).
+
+    Observation only. The verdict is `bad`, decided once on the whole surface; this
+    asks the SAME floor of each part alone, so the origin is read at the moment of the
+    check instead of guessed later by matching strings. `side` is `writer` (the
+    scribe's text), `brain` (the candidate's annotations), `code`, or a `+` of them;
+    `unattributed` when no part alone produces it (a quotation spanning two parts)."""
+    if not bad:
+        return []
+    per = {n: set(floor(t)) for n, t in parts.items() if (t or "").strip()}
+    out = []
+    for v in bad:
+        src = [n for n, vs in per.items() if v in vs]
+        side = "+".join(sorted({n.split(":", 1)[0] for n in src})) or "unattributed"
+        out.append({"violation": v, "from": src, "side": side})
+    return out
+
+
 class Distiller:
     def __init__(self, reg: Registry, store: Store, journals: dict[str, str] | None = None,
                  language: str | None = None, scribe_slots: int = 4,
@@ -705,12 +732,19 @@ class Distiller:
             if cont_target:
                 topology.add(cont_target)
             # `allowed=cont`: digits in the target's slug are code's, like a heading date.
-            bad = final_surface_violations(surface, c["evidence"], c["classes"],
-                                           allowed=cont, known_slugs=topology)
+            def floor(text: str) -> list[str]:
+                return final_surface_violations(text, c["evidence"], c["classes"],
+                                                allowed=cont, known_slugs=topology)
+            bad = floor(surface)
             if observations is not None:
+                parts = {"writer:slug": slug.group(1),
+                         "writer:title": title.group(1) if title else "",
+                         "writer:desc": desc.group(1), "writer:body": body.group(1),
+                         **_annotation_parts(s_ann, c), "code:continuation": cont}
                 observations.append({"attempt": attempt, "shape": False,
                                      "surface": surface, "raw": out,
-                                     "violations": list(bad)})
+                                     "violations": list(bad),
+                                     "origins": _origins(bad, parts, floor)})
             if not bad:
                 break
             if attempt == 2:
@@ -834,14 +868,18 @@ class Distiller:
         topology = (set(known_slugs) if known_slugs is not None
                     else set(self._known_slugs(target)))
         topology.add(target)
-        bad = final_surface_violations("\n".join([head, plain, " ".join(s_ann.values()), cand_ann]),
-                                       c["evidence"], c["classes"], allowed=date,
-                                       known_slugs=topology)
+        def floor(text: str) -> list[str]:
+            return final_surface_violations(text, c["evidence"], c["classes"],
+                                            allowed=date, known_slugs=topology)
+        bad = floor("\n".join([head, plain, " ".join(s_ann.values()), cand_ann]))
         if observations is not None:
+            parts = {"writer:heading": head, "writer:body": plain,
+                     **_annotation_parts(s_ann, c)}
             observations.append({"attempt": 1, "shape": False,
                                  "surface": "\n".join([head, plain, " ".join(s_ann.values()),
                                                         cand_ann]),
-                                 "raw": out or "", "violations": list(bad)})
+                                 "raw": out or "", "violations": list(bad),
+                                 "origins": _origins(bad, parts, floor)})
         if bad:
             _log(f"      ✗ extension surface fails the floor: {bad}")
             return None
@@ -1689,7 +1727,9 @@ class Distiller:
                             "candidate": {k: v for k, v in c.items() if k != "evidence"},
                             "evidence": c.get("evidence"),
                             "attempts": obs,
-                            "violations": [v for o in obs for v in o.get("violations", [])]})
+                            "violations": [v for o in obs for v in o.get("violations", [])],
+                            "violation_origins": [{**x, "attempt": o.get("attempt")}
+                                                  for o in obs for x in o.get("origins", [])]})
                         continue
                     _log(f"      wrote {d['slug']} → {os.path.basename(self.stage(d, path))}")
                     made.append(d["slug"])
@@ -1777,7 +1817,9 @@ class Distiller:
                     "candidate": {k: v for k, v in c.items() if k != "evidence"},
                     "evidence": c.get("evidence"),
                     "attempts": obs, "from_shelf": True,
-                    "violations": [v for o in obs for v in o.get("violations", [])]})
+                    "violations": [v for o in obs for v in o.get("violations", [])],
+                    "violation_origins": [{**x, "attempt": o.get("attempt")}
+                                          for o in obs for x in o.get("origins", [])]})
                 self.pending_compose.drop(fp)
                 continue
             self.pending_compose.save(

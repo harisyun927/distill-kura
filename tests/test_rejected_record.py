@@ -234,3 +234,78 @@ def test_a_dry_run_records_no_cut(tmp_path):
     from distill_kura.distill.sources import Segment
     assert len(d.spot([Segment("USER", "put the archive on the slow disk")])) == 4
     assert _read(d, "cut_at_limit.jsonl") == []
+
+
+# ── life-meta#1447 PR-B: each floor violation says where it came from ────────
+
+def _spot_with(keep):
+    c = json.loads(SPOT)
+    c[0]["keep"] = keep
+    return json.dumps(c, ensure_ascii=False)
+
+
+def _rejected_for(tmp_path, spot, scribe):
+    journal(str(tmp_path / "journals" / "a.jsonl"), LINES)
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    script(d, {"deserves to become a permanent memory": spot, "You write the final memory": scribe})
+    d.novelty = lambda c, near: ("NEW", "", None)   # type: ignore[method-assign]
+    r = d.run(chunks=1)
+    assert not r.get("drafts")                       # the verdict is the floor's, unchanged
+    rows = _read(d, "rejected.jsonl")
+    assert len(rows) == 1
+    return rows[0]
+
+
+def test_a_violation_only_in_the_brains_annotation_is_marked_brain(tmp_path):
+    row = _rejected_for(tmp_path, _spot_with("9999 GB のディスク"), SCRIBE)
+    assert row["violations"] and len(row["violation_origins"]) == len(row["violations"])
+    for o in row["violation_origins"]:
+        assert o["side"] == "brain" and o["from"] == ["brain:keep"]
+    assert [o["attempt"] for o in row["violation_origins"]] == [1, 2]
+    for a in row["attempts"]:                        # also on each attempt, beside its verdict
+        assert [o["violation"] for o in a["origins"]] == a["violations"]
+
+
+def test_a_violation_only_in_the_writers_text_is_marked_writer(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk, 9999 GB of it.")
+    row = _rejected_for(tmp_path, SPOT, bad)
+    assert {o["side"] for o in row["violation_origins"]} == {"writer"}
+    assert all(o["from"] == ["writer:body"] for o in row["violation_origins"])
+
+
+def test_the_same_violation_in_both_is_marked_both(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk, 9999 GB of it.")
+    row = _rejected_for(tmp_path, _spot_with("9999 GB のディスク"), bad)
+    o = row["violation_origins"][0]
+    assert o["side"] == "brain+writer"
+    assert set(o["from"]) == {"brain:keep", "writer:body"}
+
+
+def test_an_extension_violation_in_the_brains_annotation_is_marked_brain(tmp_path):
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    from tests.test_extend_continue import OLD
+    c = {"extends": OLD, "extends_why": "adds", "may_fade": "9999 GB の容量",
+         "evidence": [{"class": "USER", "text": "move it tonight"}],
+         "classes": ["USER"], "kind": "project"}
+    d.scribe = (lambda task, u, max_tokens=0:      # type: ignore[method-assign]
+                "SECTION: notes\nBODY:\nmove it tonight\n")
+    obs: list = []
+    assert d._compose_extension(c, observations=obs) is None
+    assert obs[0]["violations"]
+    assert [o["side"] for o in obs[0]["origins"]] == ["brain"] * len(obs[0]["violations"])
+    assert obs[0]["origins"][0]["from"] == ["brain:may_fade"]
+
+
+def test_a_passing_surface_carries_no_origins(tmp_path):
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    c = json.loads(SPOT)[0]
+    c.update({"evidence": [{"class": "USER", "text": LINES[0][1]}], "classes": ["USER"]})
+    script(d, {"You write the final memory": SCRIBE})
+    obs: list = []
+    assert d.compose(c, {"walked": []}, [], obs)["slug"] == "archive-mirror"
+    assert obs[-1]["violations"] == [] and obs[-1]["origins"] == []
