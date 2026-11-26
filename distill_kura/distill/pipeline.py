@@ -245,13 +245,27 @@ def _origins(bad: list[str], parts: dict[str, str], floor) -> list[dict]:
     `unattributed` when no part alone produces it (a quotation spanning two parts)."""
     if not bad:
         return []
-    per = {n: set(floor(t)) for n, t in parts.items() if (t or "").strip()}
+    per = {n: set().union(*(_atoms(x) for x in floor(t)))
+           for n, t in parts.items() if (t or "").strip()}
     out = []
     for v in bad:
-        src = [n for n, vs in per.items() if v in vs]
+        want = _atoms(v)
+        src = [n for n, atoms in per.items() if want & atoms]
         side = "+".join(sorted({n.split(":", 1)[0] for n in src})) or "unattributed"
         out.append({"violation": v, "from": src, "side": side})
     return out
+
+
+_LINKS_PREFIX = "unknown links: "
+
+
+def _atoms(violation: str) -> set[str]:
+    """One violation as the pieces it is made of. The floor folds every dead link of a
+    surface into ONE message (`unknown links: a, b`), so a part that holds only `b`
+    would never string-match it; compare link by link. Every other kind is one piece."""
+    if violation.startswith(_LINKS_PREFIX):
+        return {_LINKS_PREFIX + n for n in violation[len(_LINKS_PREFIX):].split(", ")}
+    return {violation}
 
 
 class Distiller:
