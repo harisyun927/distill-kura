@@ -257,11 +257,12 @@ def _rejected_for(tmp_path, spot, scribe):
     return rows[0]
 
 
-def test_a_violation_only_in_the_brains_annotation_is_marked_brain(tmp_path):
-    row = _rejected_for(tmp_path, _spot_with("9999 GB のディスク"), SCRIBE)
+def test_a_writers_own_annotation_violation_is_marked_writer(tmp_path):
+    bad = SCRIBE.replace("KEEP: どのディスクか", "KEEP: 9999 GB のディスク")
+    row = _rejected_for(tmp_path, SPOT, bad)
     assert row["violations"] and len(row["violation_origins"]) == len(row["violations"])
     for o in row["violation_origins"]:
-        assert o["side"] == "brain" and o["from"] == ["brain:keep"]
+        assert o["side"] == "writer" and o["from"] == ["writer:keep"]
     assert [o["attempt"] for o in row["violation_origins"]] == [1, 2]
     for a in row["attempts"]:                        # also on each attempt, beside its verdict
         assert [o["violation"] for o in a["origins"]] == a["violations"]
@@ -279,9 +280,9 @@ def test_the_same_violation_in_both_is_marked_both(tmp_path):
     bad = SCRIBE.replace("The archive goes on the slow disk.",
                          "The archive goes on the slow disk, 9999 GB of it.")
     row = _rejected_for(tmp_path, _spot_with("9999 GB のディスク"), bad)
-    o = row["violation_origins"][0]
-    assert o["side"] == "brain+writer"
-    assert set(o["from"]) == {"brain:keep", "writer:body"}
+    # PR-C: the scribe wrote KEEP, so the brain's keep is not read at all
+    for o in row["violation_origins"]:
+        assert o["side"] == "writer" and o["from"] == ["writer:body"]
 
 
 def test_an_extension_violation_in_the_brains_annotation_is_marked_brain(tmp_path):
@@ -294,10 +295,11 @@ def test_an_extension_violation_in_the_brains_annotation_is_marked_brain(tmp_pat
     d.scribe = (lambda task, u, max_tokens=0:      # type: ignore[method-assign]
                 "SECTION: notes\nBODY:\nmove it tonight\n")
     obs: list = []
-    assert d._compose_extension(c, observations=obs) is None
-    assert obs[0]["violations"]
-    assert [o["side"] for o in obs[0]["origins"]] == ["brain"] * len(obs[0]["violations"])
-    assert obs[0]["origins"][0]["from"] == ["brain:may_fade"]
+    # PR-C: the brain's sentence fails alone, is not stored, and the extension stands
+    out = d._compose_extension(c, observations=obs)
+    assert out is not None and "may_fade" not in out["annotations"]
+    assert obs[0]["violations"] == [] and obs[0]["origins"] == []
+    assert list(obs[0]["annotations_dropped"]) == ["may_fade"]
 
 
 def test_a_passing_surface_carries_no_origins(tmp_path):
@@ -315,14 +317,15 @@ def test_a_passing_surface_carries_no_origins(tmp_path):
 
 def test_unknown_links_in_different_parts_are_each_attributed(tmp_path):
     bad = SCRIBE.replace("The archive goes on the slow disk.",
-                         "The archive goes on the slow disk. See [[missing-body]].")
+                         "The archive goes on the slow disk. See [[missing-body]].").replace(
+                         "KEEP: どのディスクか", "KEEP: Keep [[missing-keep]].")
     row = _rejected_for(tmp_path, _spot_with("Keep [[missing-brain]]."), bad)
     links = [o for o in row["violation_origins"] if o["violation"].startswith("unknown links")]
     assert links
-    for o in links:
-        assert "missing-body" in o["violation"] and "missing-brain" in o["violation"]
-        assert set(o["from"]) == {"writer:body", "brain:keep"}
-        assert o["side"] == "brain+writer"
+    for o in links:                  # PR-C: the scribe wrote KEEP; the brain's is not read
+        assert "missing-body" in o["violation"] and "missing-keep" in o["violation"]
+        assert "missing-brain" not in o["violation"]
+        assert set(o["from"]) == {"writer:body", "writer:keep"} and o["side"] == "writer"
     assert not [o for o in row["violation_origins"] if o["side"] == "unattributed"]
 
 

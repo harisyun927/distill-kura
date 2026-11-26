@@ -227,12 +227,34 @@ def _curation_of(out: str) -> tuple[list[str], dict[str, str], str | None]:
         return [], ann, f"TAGS line unreadable, written untagged: {e}"
 
 
-def _annotation_parts(s_ann: dict, c: dict) -> dict[str, str]:
+def _annotation_parts(s_ann: dict, b_ann: dict) -> dict[str, str]:
     """The curation sentences the floor reads, by who wrote them: the scribe's own
-    lines (`writer:`) and the candidate's from the brain (`brain:`), which the scribe
-    cannot edit."""
+    lines (`writer:`) and the brain's that stay (`brain:`, see `_brain_annotations`)."""
     return {**{f"writer:{k}": v for k, v in s_ann.items()},
-            **{f"brain:{k}": str(c.get(k) or "") for k in ANNOTATION_KEYS}}
+            **{f"brain:{k}": v for k, v in b_ann.items()}}
+
+
+def _brain_annotations(s_ann: dict, c: dict, floor) -> tuple[dict, dict]:
+    """(kept, dropped) of the candidate's curation sentences (life-meta#1447 PR-C).
+
+    The scribe cannot edit the brain's sentences, so a violation in one used to sink a
+    memory the scribe had written cleanly: a retry could never fix it. Now a key the
+    scribe wrote is the scribe's alone (it was already the one stored); a key it left
+    out falls back to the brain's sentence only if that sentence passes the SAME floor
+    on its own. One that does not is not stored — `dropped` names the key and why —
+    and the memory goes on without it. The floor is not loosened: every sentence that
+    is kept still rides in the surface the whole floor reads."""
+    kept, dropped = {}, {}
+    for k in ANNOTATION_KEYS:
+        v = c.get(k)
+        if k in s_ann or not isinstance(v, str) or not v.strip():
+            continue
+        bad = floor(v)
+        if bad:
+            dropped[k] = list(bad)
+        else:
+            kept[k] = v
+    return kept, dropped
 
 
 def _origins(bad: list[str], parts: dict[str, str], floor) -> list[dict]:
@@ -734,9 +756,6 @@ class Distiller:
             # lands in MEMORY.md and the resident map, the curation sentences are
             # saved under the curation mark — all of it is model-written surface.
             _, s_ann, _ = _curation_of(out)
-            cand_ann = " ".join(str(c.get(k) or "") for k in ANNOTATION_KEYS)
-            surface = "\n".join([slug.group(1), (title.group(1) if title else ""), text,
-                                 " ".join(s_ann.values()), cand_ann, cont])
             topology = (set(known_slugs) if known_slugs is not None
                         else set(self._known_slugs(_safe_slug(slug.group(1)))))
             # The output's own slug is code-chosen and is live in the same breath. A
@@ -749,16 +768,20 @@ class Distiller:
             def floor(text: str) -> list[str]:
                 return final_surface_violations(text, c["evidence"], c["classes"],
                                                 allowed=cont, known_slugs=topology)
+            b_ann, b_dropped = _brain_annotations(s_ann, c, floor)
+            surface = "\n".join([slug.group(1), (title.group(1) if title else ""), text,
+                                 " ".join(s_ann.values()), " ".join(b_ann.values()), cont])
             bad = floor(surface)
             if observations is not None:
                 parts = {"writer:slug": slug.group(1),
                          "writer:title": title.group(1) if title else "",
                          "writer:desc": desc.group(1), "writer:body": body.group(1),
-                         **_annotation_parts(s_ann, c), "code:continuation": cont}
+                         **_annotation_parts(s_ann, b_ann), "code:continuation": cont}
                 observations.append({"attempt": attempt, "shape": False,
                                      "surface": surface, "raw": out,
                                      "violations": list(bad),
-                                     "origins": _origins(bad, parts, floor)})
+                                     "origins": _origins(bad, parts, floor),
+                                     "annotations_dropped": b_dropped})
             if not bad:
                 break
             if attempt == 2:
@@ -773,10 +796,12 @@ class Distiller:
             plain = cont + "\n\n" + plain
         return self._draft_record(c, out, slug=_safe_slug(slug.group(1)),
                                   title=(title.group(1).strip()[:40] if title else ""),
-                                  description=desc.group(1).strip()[:200], body=plain)
+                                  description=desc.group(1).strip()[:200], body=plain,
+                                  brain_ann=(b_ann, b_dropped))
 
     def _draft_record(self, c: dict, out: str, *, slug: str, title: str, description: str,
-                      body: str, extends: str | None = None) -> dict:
+                      body: str, extends: str | None = None,
+                      brain_ann: tuple[dict, dict] = ({}, {})) -> dict:
         """The record stage() writes, from a candidate and the scribe's answer.
 
         A new memory and an extension differ only in their first four keys; everything
@@ -796,13 +821,16 @@ class Distiller:
             # body or the index — a callsign is a way BACK, not content
             "routing_cues": c.get("routing_cues") or [],
             "routing_cues_refused": c.get("routing_cues_refused") or {},
-            **self._curate(c, out)})
+            **self._curate(c, out, brain_ann)})
         return rec
 
-    def _curate(self, c: dict, out: str) -> dict:
-        """Tags and the three sentences, from the brain's candidate and the scribe's
-        output, verified against the evidence. The scribe's sentences win (it wrote the
-        final text); tags are the union, and every claiming tag must earn its place."""
+    def _curate(self, c: dict, out: str,
+                brain_ann: tuple[dict, dict] = ({}, {})) -> dict:
+        """Tags and the three sentences, verified against the evidence. The scribe's
+        sentences win (it wrote the final text); a brain sentence is stored only if
+        compose kept it (`brain_ann` = the (kept, dropped) of `_brain_annotations`),
+        so nothing is stored that the floor did not read. Tags are the union, and
+        every claiming tag must earn its place."""
         s_tags, s_ann, problem = _curation_of(out)
         proposed = list(c.get("tags") or []) + s_tags
         try:
@@ -811,12 +839,17 @@ class Distiller:
             problem = (problem + "; " if problem else "") + f"candidate tags unreadable: {e}"
             proposed = s_tags
         kept, basis, refused = verify_tags(proposed, c["evidence"])
-        ann = {k: c[k] for k in ANNOTATION_KEYS if isinstance(c.get(k), str) and c[k].strip()}
+        ann = dict(brain_ann[0])
         ann.update(s_ann)
         if problem:
             _log(f"      ⚠ {problem}")
-        return {"tags": list(kept), "tag_basis": basis, "tags_refused": refused,
+        if brain_ann[1]:
+            _log(f"      · brain annotations not stored: {brain_ann[1]}")
+        out_ = {"tags": list(kept), "tag_basis": basis, "tags_refused": refused,
                 "annotations": ann, "curation_problem": problem}
+        if brain_ann[1]:
+            out_["annotations_dropped"] = brain_ann[1]
+        return out_
 
     def _evidence_date(self) -> str:
         """The date the evidence carries: the journal file's last change, local time.
@@ -874,32 +907,33 @@ class Distiller:
         # code's claim, so it rides in `allowed`; every other number — a "99x" in
         # the section, the body, the curation sentences — must be the evidence's.
         _, s_ann, _ = _curation_of(out or "")
-        # The candidate's own sentences ride along too (_curate merges them below),
-        # so they stand on the same floor as in the new-memory path: the extension
-        # branch used to floor only the scribe's sentences, and an unbacked number
-        # in the CANDIDATE's belongs_because slipped into the memory under the mark.
-        cand_ann = " ".join(str(c.get(k) or "") for k in ANNOTATION_KEYS)
         topology = (set(known_slugs) if known_slugs is not None
                     else set(self._known_slugs(target)))
         topology.add(target)
         def floor(text: str) -> list[str]:
             return final_surface_violations(text, c["evidence"], c["classes"],
                                             allowed=date, known_slugs=topology)
-        bad = floor("\n".join([head, plain, " ".join(s_ann.values()), cand_ann]))
+        # The candidate's own sentences stand on the same floor as in the new-memory
+        # path (an unbacked number in the CANDIDATE's belongs_because once slipped in
+        # under the mark); one that fails alone is not stored rather than sinking the
+        # extension, as `_brain_annotations` says.
+        b_ann, b_dropped = _brain_annotations(s_ann, c, floor)
+        surface = "\n".join([head, plain, " ".join(s_ann.values()), " ".join(b_ann.values())])
+        bad = floor(surface)
         if observations is not None:
             parts = {"writer:heading": head, "writer:body": plain,
-                     **_annotation_parts(s_ann, c)}
-            observations.append({"attempt": 1, "shape": False,
-                                 "surface": "\n".join([head, plain, " ".join(s_ann.values()),
-                                                        cand_ann]),
+                     **_annotation_parts(s_ann, b_ann)}
+            observations.append({"attempt": 1, "shape": False, "surface": surface,
                                  "raw": out or "", "violations": list(bad),
-                                 "origins": _origins(bad, parts, floor)})
+                                 "origins": _origins(bad, parts, floor),
+                                 "annotations_dropped": b_dropped})
         if bad:
             _log(f"      ✗ extension surface fails the floor: {bad}")
             return None
         text = head + "\n" + plain
         return self._draft_record(c, out or "", slug=target, title="", description="",
-                                  body=text.strip(), extends=target)
+                                  body=text.strip(), extends=target,
+                                  brain_ann=(b_ann, b_dropped))
 
     # ── provenance that outlives the draft ───────────────────────────────
     #
@@ -937,6 +971,11 @@ class Distiller:
             "language": self.language,
             "created_at": datetime.now(timezone.utc).isoformat()[:19] + "Z",
         }
+        # A brain sentence the floor refused (life-meta#1447 PR-C): which key and why,
+        # beside the memory it was left out of. Only when there is one, so manifests
+        # of memories that dropped nothing keep their old shape and digest.
+        if d.get("annotations_dropped"):
+            manifest["annotations_dropped"] = d["annotations_dropped"]
         # Routing cues are their OWN schema version, never folded into gate_version:
         # the envelope mark already binds the manifest's digest, and cue plumbing can
         # evolve without re-touching the gate's number. memory_slug is the slug this
