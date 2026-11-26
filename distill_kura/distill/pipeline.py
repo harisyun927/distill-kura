@@ -371,6 +371,10 @@ class Distiller:
         rolled back), that stretch was gone for good. The caller shelves the batch on
         a failure instead; here we only tell the two apart."""
         limit = max_items or self.max_items
+        # What the limit cut and how many passes ran, for the caller's record
+        # (life-meta#1447). Read by _process_batch only, so a bench that calls spot()
+        # writes nothing new; the candidates returned are exactly what they were.
+        self.last_spot = {"cut": [], "passes": 1}
         try:
             raw = self._brain_json(
                 prompts.SPOT_SYS.format(max_items=limit, language=self.language),
@@ -382,7 +386,9 @@ class Distiller:
             detail = err or "the brain answered nothing at all"
             return [], {"reason": failure_kind(detail) if err else "bad_reply",
                         "detail": detail}
-        found = salvage(raw)[:limit]
+        found = salvage(raw)
+        self.last_spot["cut"] = found[limit:]
+        found = found[:limit]
         if not found and not _is_empty_list(raw):
             # The failure keeps only the head (it rides the shelf); the whole reply is
             # recorded here so the shape of what the brain said can be read later.
@@ -396,6 +402,7 @@ class Distiller:
         for _ in range(max(0, self.coverage_passes - 1)):
             if len(found) >= limit:
                 break
+            self.last_spot["passes"] += 1
             already = "\n".join(f"- {c.get('topic')}: {c.get('why')}" for c in found)
             more = salvage(self._brain_json(
                 prompts.COVERAGE_SYS.format(max_items=limit - len(found),
@@ -405,7 +412,9 @@ class Distiller:
             if not more:
                 break
             seen = {c.get("topic") for c in found}
-            found += [c for c in more if c.get("topic") not in seen][:limit - len(found)]
+            fresh = [c for c in more if c.get("topic") not in seen]
+            self.last_spot["cut"] += fresh[limit - len(found):]
+            found += fresh[:limit - len(found)]
         return found, None
 
     # ── ④ novelty ────────────────────────────────────────────────────────
@@ -1571,6 +1580,16 @@ class Distiller:
                           "pending_detail": failure["detail"][:200]})
             return {"failure": failure}
         _log(f"  brain found {len(cands)} candidates ({time.time()-t0:.1f}s)")
+        spot = getattr(self, "last_spot", None) or {"cut": [], "passes": 1}
+        if spot["cut"]:
+            # Past max_items the brain's candidates used to vanish without a count.
+            # Observation only: nothing reads this back (life-meta#1447 PR-B).
+            _log(f"  ✂ {len(spot['cut'])} candidates past the limit of {self.max_items}")
+            self._record_rejected("cut_at_limit.jsonl", {
+                "source_key": key, "source": os.path.basename(path),
+                "limit": self.max_items, "kept": len(cands), "passes": spot["passes"],
+                "cut": [{k: x.get(k) for k in ("topic", "kind", "why")}
+                        for x in spot["cut"]]})
         kept, dropped, ideas = gate(cands, segs, self.store_text())
         for i in ideas:
             self.seeds.sow(f"{i.get('topic')} — {i.get('why')}", "brain/spot")
@@ -1689,6 +1708,7 @@ class Distiller:
             "draft_tokens_est": estimate("\n".join(draft_text)),
             "index_tokens_est": estimate(self.store.index_text()),
             "composes_pending": composes_pending,
+            "cut_at_limit": len(spot["cut"]), "spot_passes": spot["passes"],
         })
         return {"drafts": made, "dropped": killed, "covered": covered, "seeds": sown,
                 "recurred": recurred, "cue_receipts": cue_receipts,

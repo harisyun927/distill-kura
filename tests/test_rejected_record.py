@@ -170,3 +170,67 @@ def test_a_dry_run_distiller_gets_no_record(tmp_path):
     d.spot_checked([Segment("USER", "hello there")])
     d._record_rejected("rejected.jsonl", {"x": 1})
     assert _read(d, "bad_replies.jsonl") == [] and _read(d, "rejected.jsonl") == []
+
+
+# ── life-meta#1447 PR-B: what the max_items limit cut leaves a record ────────
+
+def _spot_of(topics):
+    q = "[USER] put the archive on the slow disk, and remember that"
+    return json.dumps([{"topic": t, "kind": "project", "why": f"why {t}", "quotes": [q]}
+                       for t in topics])
+
+
+def _run_with(tmp_path, topics, answers_extra=None, passes=None):
+    journal(str(tmp_path / "journals" / "a.jsonl"), LINES)
+    reg, store = build(tmp_path)
+    if passes:
+        reg.raw["distill"]["coverage_passes"] = passes
+    d = Distiller(reg, store)
+    answers = dict(answers_extra or {})
+    answers.update({"deserves to become a permanent memory": _spot_of(topics),
+                    "You write the final memory": SCRIBE})
+    script(d, answers)
+    d.novelty = lambda c, near: ("NEW", "", None)   # type: ignore[method-assign]
+    return d, d.run(chunks=1)
+
+
+def test_candidates_past_the_limit_are_recorded_with_topic_and_why(tmp_path):
+    topics = ["t1", "t2", "t3", "t4", "t5", "t6"]
+    d, _ = _run_with(tmp_path, topics)
+    rows = _read(d, "cut_at_limit.jsonl")
+    assert len(rows) == 1
+    assert rows[0]["limit"] == 4 and rows[0]["kept"] == 4 and rows[0]["passes"] == 1
+    assert [c["topic"] for c in rows[0]["cut"]] == ["t5", "t6"]
+    assert rows[0]["cut"][0]["why"] == "why t5" and "quotes" not in rows[0]["cut"][0]
+    m = _read(d, "metrics.jsonl")[-1]
+    assert m["cut_at_limit"] == 2 and m["spot_passes"] == 1
+
+
+def test_the_cut_record_does_not_change_the_batch(tmp_path):
+    over, over_r = _run_with(tmp_path / "over", ["t1", "t2", "t3", "t4", "t5", "t6"])
+    at, at_r = _run_with(tmp_path / "at", ["t1", "t2", "t3", "t4"])
+    for k in ("drafts", "dropped", "covered", "seeds"):
+        assert over_r.get(k) == at_r.get(k), k
+    assert _read(at, "cut_at_limit.jsonl") == []      # nothing cut, nothing recorded
+    assert _read(at, "metrics.jsonl")[-1]["cut_at_limit"] == 0
+    from distill_kura.distill.sources import Segment
+    segs = [Segment("USER", "put the archive on the slow disk, and remember that")]
+    assert [c["topic"] for c in over.spot(segs)] == ["t1", "t2", "t3", "t4"]
+
+
+def test_the_second_pass_cut_is_recorded_too(tmp_path):
+    d, _ = _run_with(tmp_path, ["t1", "t2"], passes=2,
+                     answers_extra={"WALKED PAST": _spot_of(["t2", "t3", "t4", "t5", "t6"])})
+    rows = _read(d, "cut_at_limit.jsonl")
+    assert len(rows) == 1 and rows[0]["passes"] == 2
+    assert [c["topic"] for c in rows[0]["cut"]] == ["t5", "t6"]   # t2 is a repeat, not a cut
+
+
+def test_a_dry_run_records_no_cut(tmp_path):
+    journal(str(tmp_path / "journals" / "a.jsonl"), LINES)
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store, writes=False)
+    script(d, {"deserves to become a permanent memory": _spot_of(["a", "b", "c", "d", "e"])})
+    from distill_kura.distill.sources import Segment
+    assert len(d.spot([Segment("USER", "put the archive on the slow disk")])) == 4
+    assert _read(d, "cut_at_limit.jsonl") == []
