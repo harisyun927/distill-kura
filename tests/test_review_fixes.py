@@ -185,9 +185,16 @@ def test_an_extensions_candidate_sentences_wear_the_number_floor(tmp_path):
             "classes": ["USER"], "kind": "project"}
     bad = {**base, "belongs_because": "the 99-rack note lives here"}
     good = {**base, "belongs_because": "this store keeps storage decisions"}
-    assert d._compose_extension(bad) is None, "an unbacked number walked in through the candidate"
+    # life-meta#1447 PR-C: the sentence the scribe cannot fix is not stored; the
+    # extension it rode on is no longer sunk by it.
+    out = d._compose_extension(bad)
+    assert out is not None, "the scribe's clean extension was sunk by the brain's sentence"
+    assert "belongs_because" not in out["annotations"]
+    assert "99" not in out["body"] and "99" not in json.dumps(out["annotations"])
+    assert list(out["annotations_dropped"]) == ["belongs_because"]
     out = d._compose_extension(good)
     assert out is not None and "99" not in json.dumps(out)
+    assert out["annotations"]["belongs_because"] == "this store keeps storage decisions"
 
 
 # ── store: the write policy an operator set is the one they get ─────────────
