@@ -309,3 +309,43 @@ def test_a_passing_surface_carries_no_origins(tmp_path):
     obs: list = []
     assert d.compose(c, {"walked": []}, [], obs)["slug"] == "archive-mirror"
     assert obs[-1]["violations"] == [] and obs[-1]["origins"] == []
+
+
+# ── the floor folds every dead link into ONE message; origin is read link by link ──
+
+def test_unknown_links_in_different_parts_are_each_attributed(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk. See [[missing-body]].")
+    row = _rejected_for(tmp_path, _spot_with("Keep [[missing-brain]]."), bad)
+    links = [o for o in row["violation_origins"] if o["violation"].startswith("unknown links")]
+    assert links
+    for o in links:
+        assert "missing-body" in o["violation"] and "missing-brain" in o["violation"]
+        assert set(o["from"]) == {"writer:body", "brain:keep"}
+        assert o["side"] == "brain+writer"
+    assert not [o for o in row["violation_origins"] if o["side"] == "unattributed"]
+
+
+def test_an_unknown_link_in_one_part_names_only_that_part(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk. See [[missing-body]].")
+    row = _rejected_for(tmp_path, SPOT, bad)
+    links = [o for o in row["violation_origins"] if o["violation"].startswith("unknown links")]
+    assert links and all(o["from"] == ["writer:body"] and o["side"] == "writer" for o in links)
+
+
+def test_origin_reading_does_not_change_the_verdict_or_the_record_shape(tmp_path):
+    bad = SCRIBE.replace("The archive goes on the slow disk.",
+                         "The archive goes on the slow disk. See [[missing-body]].")
+    journal(str(tmp_path / "journals" / "a.jsonl"), LINES)
+    reg, store = build(tmp_path)
+    d = Distiller(reg, store)
+    script(d, {"deserves to become a permanent memory": _spot_with("Keep [[missing-brain]]."),
+               "You write the final memory": bad})
+    d.novelty = lambda c, near: ("NEW", "", None)   # type: ignore[method-assign]
+    r = d.run(chunks=1)
+    assert not r.get("drafts") and not r.get("dropped")
+    row = _read(d, "rejected.jsonl")[0]
+    for o in row["violation_origins"]:
+        assert set(o) == {"violation", "from", "side", "attempt"}
+        assert isinstance(o["from"], list) and isinstance(o["side"], str)
